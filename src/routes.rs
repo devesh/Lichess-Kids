@@ -377,7 +377,7 @@ pub async fn claim_sync(
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Not logged in" }))).into_response(),
     };
 
-    let (token, mut game_rating, mut puzzle_rating) = {
+    let (token, mut puzzle_rating) = {
         let conn = state.db.lock().unwrap();
         let token: Option<String> = conn
             .query_row(
@@ -387,22 +387,21 @@ pub async fn claim_sync(
             )
             .ok();
 
-        let mut g_rate = 1500;
         let mut p_rate = 1500;
         if let Some(user) = db::get_user(&conn, &username).unwrap() {
-            g_rate = user.current_game_rating;
             p_rate = user.current_puzzle_rating;
         }
-        (token, g_rate, p_rate)
+        (token, p_rate)
     };
 
     // 1. Fetch user's rating profile
     if let Some(ref t) = token {
         if let Ok(p) = lichess::fetch_profile(t).await {
-            game_rating = p.perfs.blitz.or(p.perfs.rapid).map(|x| x.rating).unwrap_or(1500);
-            puzzle_rating = p.perfs.puzzle.map(|x| x.rating).unwrap_or(1500);
+            let g_rate = p.perfs.blitz.or(p.perfs.rapid).map(|x| x.rating).unwrap_or(1500);
+            let p_rate = p.perfs.puzzle.map(|x| x.rating).unwrap_or(1500);
             let conn = state.db.lock().unwrap();
-            let _ = db::update_user_ratings(&conn, &username, game_rating, puzzle_rating);
+            let _ = db::update_user_ratings(&conn, &username, g_rate, p_rate);
+            puzzle_rating = p_rate;
         }
     }
 
@@ -462,9 +461,7 @@ pub async fn claim_sync(
     };
 
     // Reconstruct rating progression and process claims inside a block to drop the lock before returning
-    let mut spins_earned_from_puzzles = 0;
-    let mut total_eligible = 0;
-    {
+    let (spins_earned_from_puzzles, total_eligible) = {
         let conn = state.db.lock().unwrap();
         // Sort chronologically (oldest first) to track rating progress correctly
         let mut puzzles_chronological = puzzles.clone();
@@ -511,8 +508,9 @@ pub async fn claim_sync(
         }
 
         // Award 1 spin for every group of 25 eligible puzzles
-        total_eligible = eligible_puzzle_ids.len();
-        let num_spins = total_eligible / 25;
+        let total = eligible_puzzle_ids.len();
+        let num_spins = total / 25;
+        let mut spins = 0;
 
         for i in 0..num_spins {
             // Claim 25 puzzles
@@ -521,9 +519,10 @@ pub async fn claim_sync(
                 let _ = db::claim_puzzle(&conn, &username, p_id);
             }
             let _ = db::add_spins(&conn, &username, 1);
-            spins_earned_from_puzzles += 1;
+            spins += 1;
         }
-    }
+        (spins, total)
+    };
 
     let updated_user = {
         let conn = state.db.lock().unwrap();
