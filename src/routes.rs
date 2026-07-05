@@ -713,24 +713,33 @@ pub async fn get_friends(
     let mut friends_profiles = Vec::new();
 
     for f_name in followed {
-        // Check local DB
+        // Check local DB case-insensitively to get stored user casing
         let local_user = {
             let conn = state.db.lock().unwrap();
-            db::get_user(&conn, &f_name).ok().flatten()
+            conn.query_row(
+                "SELECT username, avatar_base, current_game_rating, current_puzzle_rating FROM users WHERE LOWER(username) = LOWER(?1)",
+                params![f_name],
+                |row| Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i32>(2)?,
+                    row.get::<_, i32>(3)?
+                ))
+            ).ok()
         };
 
-        if let Some(user) = local_user {
+        if let Some((stored_username, avatar_base, g_rating, p_rating)) = local_user {
             let equipped = {
                 let conn = state.db.lock().unwrap();
-                db::get_equipped(&conn, &f_name).unwrap_or_default()
+                db::get_equipped(&conn, &stored_username).unwrap_or_default()
             };
             friends_profiles.push(FriendProfile {
-                username: f_name.clone(),
-                avatar_base: user.avatar_base,
-                current_game_rating: user.current_game_rating,
-                current_puzzle_rating: user.current_puzzle_rating,
+                username: stored_username.clone(),
+                avatar_base,
+                current_game_rating: g_rating,
+                current_puzzle_rating: p_rating,
                 equipped,
-                lichess_url: format!("https://lichess.org/@/{}", f_name),
+                lichess_url: format!("https://lichess.org/@/{}", stored_username),
             });
         }
     }
