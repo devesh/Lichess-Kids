@@ -35,6 +35,20 @@
             box-shadow: 0 8px 30px var(--accent-glow);
             border-color: var(--accent);
         }
+        .btn-danger {
+            background: rgba(255, 23, 68, 0.15);
+            color: var(--error);
+            border: 1px solid rgba(255, 23, 68, 0.3);
+            font-weight: 600;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.2s ease;
+        }
+        .btn-danger:hover {
+            background: rgba(255, 23, 68, 0.25);
+            border-color: rgba(255, 23, 68, 0.5);
+            box-shadow: 0 4px 15px rgba(255, 23, 68, 0.2);
+        }
     </style>
 </head>
 <body>
@@ -103,6 +117,17 @@
                     <div id="sync-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--knight-color) 0%, var(--accent) 100%); transition: width 0.2s ease;"></div>
                 </div>
                 <div id="sync-status" style="margin-top: 12px; font-size: 0.9rem; font-weight: 600; text-align: center; color: var(--success);"></div>
+            </div>
+
+            <!-- Danger Zone Panel -->
+            <div class="glass-panel" style="border: 1px solid rgba(255, 23, 68, 0.15); background: rgba(255, 23, 68, 0.02); margin-top: 5px;">
+                <h3 style="color: var(--error); font-size: 1rem; margin-bottom: 8px;">Danger Zone</h3>
+                <p style="color: var(--text-secondary); font-size: 0.8rem; margin-bottom: 12px; line-height: 1.4;">
+                    Permanently delete your Lichess Kids profile, coins, spins, and purchases.
+                </p>
+                <button id="delete-profile-btn" class="btn-danger" style="width: 100%; padding: 8px 16px; font-size: 0.9rem;">
+                    Delete Profile
+                </button>
             </div>
         </div>
 
@@ -741,6 +766,35 @@
                 console.error(err);
             }
         });
+
+        // -------------------------------------------------------------
+        // DELETE PROFILE
+        // -------------------------------------------------------------
+
+        const deleteProfileBtn = document.getElementById('delete-profile-btn');
+        if (deleteProfileBtn) {
+            deleteProfileBtn.addEventListener('click', async () => {
+                const confirmed = confirm("Are you absolutely sure you want to delete your profile? This cannot be undone.");
+                if (!confirmed) return;
+                
+                const secondConfirmed = confirm("This will permanently erase all your Lichess Kids achievements, coins, spins, and purchased accessories. Press OK to confirm deletion.");
+                if (!secondConfirmed) return;
+                
+                try {
+                    const res = await fetch('/api/profile', { method: 'DELETE' });
+                    const data = await res.json();
+                    if (data.success) {
+                        alert("Your profile has been successfully deleted.");
+                        window.location.href = '/login.html';
+                    } else {
+                        alert(`Failed to delete profile: ${data.error}`);
+                    }
+                } catch (err) {
+                    console.error(err);
+                    alert("An error occurred while deleting your profile.");
+                }
+            });
+        }
 
         // Initial Load
         loadProfile();

@@ -984,3 +984,31 @@ fn build_avatar_svg_string(
     )
 }
 
+pub async fn delete_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let username = match get_username(&headers) {
+        Some(name) => name,
+        None => return Err((StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Not logged in" })))),
+    };
+
+    let conn = state.db.lock().unwrap();
+    match db::delete_user(&conn, &username) {
+        Ok(_) => {
+            // Delete the username cookie
+            let cookie = "username=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax";
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                axum::http::header::SET_COOKIE,
+                axum::http::HeaderValue::from_str(cookie).unwrap(),
+            );
+            Ok((headers, Json(serde_json::json!({ "success": true }))))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )),
+    }
+}
+

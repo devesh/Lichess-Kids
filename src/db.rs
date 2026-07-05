@@ -339,6 +339,12 @@ pub fn update_last_synced_at(conn: &Connection, username: &str, last_synced_at: 
     Ok(())
 }
 
+pub fn delete_user(conn: &Connection, username: &str) -> Result<()> {
+    conn.execute("DELETE FROM users WHERE username = ?1", params![username])?;
+    conn.execute("DELETE FROM lichess_tokens WHERE username = ?1", params![username])?;
+    Ok(())
+}
+
 
 
 

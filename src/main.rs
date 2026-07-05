@@ -10,7 +10,7 @@ use tower_http::services::ServeDir;
 
 use lichesskids::db;
 use lichesskids::routes::{
-    add_friend, buy_item, claim_sync, delete_friend, equip_item, get_friends, get_profile,
+    add_friend, buy_item, claim_sync, delete_friend, delete_profile, equip_item, get_friends, get_profile,
     get_shop, logout, oauth_callback, oauth_start, select_avatar, spin_wheel,
     get_user_profile_html, get_avatar_svg, get_assets_catalog, AppState,
 };
@@ -43,7 +43,7 @@ async fn main() {
         .route("/user/:username", get(get_user_profile_html))
         .route("/api/avatar-svg/:username", get(get_avatar_svg))
         // API Routes
-        .route("/api/profile", get(get_profile))
+        .route("/api/profile", get(get_profile).delete(delete_profile))
         .route("/api/logout", post(logout))
         .route("/api/oauth/start", post(oauth_start))
         .route("/api/oauth/callback", get(oauth_callback))

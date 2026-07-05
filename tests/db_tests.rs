@@ -174,3 +174,32 @@ fn test_last_synced_at() {
     assert_eq!(u2.last_synced_at, 123456789);
 }
 
+#[test]
+fn test_delete_user() {
+    let conn = setup_in_memory_db();
+    db::create_user(&conn, "gabriel", "cat").unwrap();
+    
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS lichess_tokens (username TEXT PRIMARY KEY, access_token TEXT NOT NULL);",
+        []
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO lichess_tokens (username, access_token) VALUES ('gabriel', 'my_token');",
+        []
+    ).unwrap();
+
+    let u = db::get_user(&conn, "gabriel").unwrap();
+    assert!(u.is_some());
+
+    db::delete_user(&conn, "gabriel").unwrap();
+    let u_after = db::get_user(&conn, "gabriel").unwrap();
+    assert!(u_after.is_none());
+
+    let token_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM lichess_tokens WHERE username = 'gabriel'",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(token_exists, 0);
+}
+
