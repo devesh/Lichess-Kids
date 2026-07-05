@@ -3,7 +3,13 @@ Description=Lichess Kids Web Service
 After=network-online.target
 
 [Container]
-Image=localhost/lichesskids:latest
+# To use the locally built docker image instead, uncomment the line below and comment out the GHCR image:
+# Image=localhost/lichesskids:latest
+Image=ghcr.io/devesh/lichess-kids:latest
+
+# Enable Podman Auto-Update (checks the registry for newer images automatically)
+AutoUpdate=registry
+
 PublishPort=64355:64355
 Volume=lichesskids-db.volume:/data:Z
 Volume=lichesskids-assets.volume:/app/assets:Z
