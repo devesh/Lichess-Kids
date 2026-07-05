@@ -344,20 +344,23 @@ pub async fn claim_sync(
         .unwrap()
         .as_millis() as i64;
 
+    let token = match token {
+        Some(t) => t,
+        None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Lichess token not found. Please log in again." }))).into_response(),
+    };
+
     // 1. Fetch user's rating profile
-    if let Some(ref t) = token {
-        if let Ok(p) = lichess::fetch_profile(t).await {
-            let g_rate = p.perfs.blitz.or(p.perfs.rapid).map(|x| x.rating).unwrap_or(1500);
-            let p_rate = p.perfs.puzzle.map(|x| x.rating).unwrap_or(1500);
-            let conn = state.db.lock().unwrap();
-            let _ = db::update_user_ratings(&conn, &username, g_rate, p_rate);
-            puzzle_rating = p_rate;
-        }
+    if let Ok(p) = lichess::fetch_profile(&token).await {
+        let g_rate = p.perfs.blitz.or(p.perfs.rapid).map(|x| x.rating).unwrap_or(1500);
+        let p_rate = p.perfs.puzzle.map(|x| x.rating).unwrap_or(1500);
+        let conn = state.db.lock().unwrap();
+        let _ = db::update_user_ratings(&conn, &username, g_rate, p_rate);
+        puzzle_rating = p_rate;
     }
 
     // 2. Fetch and evaluate games
     // A spin for every person/bot you beat with rating >= user's rating at time of play
-    let games = match lichess::fetch_games(&username, token.as_deref(), Some(last_synced_at)).await {
+    let games = match lichess::fetch_games(&username, &token, Some(last_synced_at)).await {
         Ok(g) => g,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Games fetch failed: {}", e) }))).into_response(),
     };
@@ -400,8 +403,7 @@ pub async fn claim_sync(
         }
     }
 
-    let token_str = token.unwrap_or_else(|| "mock_token".to_string());
-    let puzzles = match lichess::fetch_puzzle_activity(&token_str, Some(last_synced_at)).await {
+    let puzzles = match lichess::fetch_puzzle_activity(&token, Some(last_synced_at)).await {
         Ok(p) => p,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Puzzles fetch failed: {}", e) }))).into_response(),
     };

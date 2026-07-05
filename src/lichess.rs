@@ -73,16 +73,7 @@ pub async fn fetch_profile(token: &str) -> Result<LichessProfile, reqwest::Error
     response.error_for_status()?.json::<LichessProfile>().await
 }
 
-pub async fn fetch_games(username: &str, token: Option<&str>, since: Option<i64>) -> Result<Vec<LichessGame>, reqwest::Error> {
-    // If username is mock_user or starts with mock, return mock games
-    if username.starts_with("mock_") || token.is_none() || token == Some("mock_token") {
-        let mock_games = generate_mock_games(username);
-        if let Some(s) = since {
-            return Ok(mock_games.into_iter().filter(|g| g.created_at > s).collect());
-        }
-        return Ok(mock_games);
-    }
-
+pub async fn fetch_games(username: &str, token: &str, since: Option<i64>) -> Result<Vec<LichessGame>, reqwest::Error> {
     let client = reqwest::Client::new();
     let mut query = vec![("rated", "true".to_string())];
     if let Some(s) = since {
@@ -94,7 +85,7 @@ pub async fn fetch_games(username: &str, token: Option<&str>, since: Option<i64>
     let response = client
         .get(format!("https://lichess.org/api/games/user/{}", username))
         .query(&query)
-        .bearer_auth(token.unwrap_or_default())
+        .bearer_auth(token)
         .header("User-Agent", "LichessKids-App/1.0")
         .send()
         .await?;
@@ -114,15 +105,6 @@ pub async fn fetch_games(username: &str, token: Option<&str>, since: Option<i64>
 }
 
 pub async fn fetch_puzzle_activity(token: &str, since: Option<i64>) -> Result<Vec<LichessPuzzleRound>, reqwest::Error> {
-    // If token is mock_token, return mock puzzle activities
-    if token == "mock_token" {
-        let mock_puzzles = generate_mock_puzzles();
-        if let Some(s) = since {
-            return Ok(mock_puzzles.into_iter().filter(|p| p.date > s).collect());
-        }
-        return Ok(mock_puzzles);
-    }
-
     let client = reqwest::Client::new();
     let mut query = Vec::new();
     if let Some(s) = since {
@@ -152,181 +134,6 @@ pub async fn fetch_puzzle_activity(token: &str, since: Option<i64>) -> Result<Ve
     Ok(rounds)
 }
 
-// Mock data generators for local testing without Lichess OAuth configuration
-fn generate_mock_games(username: &str) -> Vec<LichessGame> {
-    vec![
-        LichessGame {
-            id: "game1".to_string(),
-            rated: true,
-            players: LichessPlayers {
-                white: LichessPlayer {
-                    user: Some(LichessPlayerUser {
-                        name: username.to_string(),
-                        id: username.to_lowercase(),
-                    }),
-                    rating: Some(1500),
-                },
-                black: LichessPlayer {
-                    user: Some(LichessPlayerUser {
-                        name: "StrongOpponent".to_string(),
-                        id: "strongopponent".to_string(),
-                    }),
-                    rating: Some(1550),
-                },
-            },
-            winner: Some("white".to_string()),
-            created_at: 1672531100000,
-        },
-        LichessGame {
-            id: "game2".to_string(),
-            rated: true,
-            players: LichessPlayers {
-                white: LichessPlayer {
-                    user: Some(LichessPlayerUser {
-                        name: "EasyBot".to_string(),
-                        id: "easybot".to_string(),
-                    }),
-                    rating: Some(1400),
-                },
-                black: LichessPlayer {
-                    user: Some(LichessPlayerUser {
-                        name: username.to_string(),
-                        id: username.to_lowercase(),
-                    }),
-                    rating: Some(1510),
-                },
-            },
-            winner: Some("black".to_string()), // User won
-            created_at: 1672531200000,
-        },
-        LichessGame {
-            id: "game3".to_string(),
-            rated: true,
-            players: LichessPlayers {
-                white: LichessPlayer {
-                    user: Some(LichessPlayerUser {
-                        name: username.to_string(),
-                        id: username.to_lowercase(),
-                    }),
-                    rating: Some(1520),
-                },
-                black: LichessPlayer {
-                    user: Some(LichessPlayerUser {
-                        name: "EvenOpponent".to_string(),
-                        id: "evenopponent".to_string(),
-                    }),
-                    rating: Some(1520),
-                },
-            },
-            winner: Some("white".to_string()), // User won
-            created_at: 1672531300000,
-        },
-        LichessGame {
-            id: "game4".to_string(),
-            rated: true,
-            players: LichessPlayers {
-                white: LichessPlayer {
-                    user: Some(LichessPlayerUser {
-                        name: "ToughBot".to_string(),
-                        id: "toughbot".to_string(),
-                    }),
-                    rating: Some(1600),
-                },
-                black: LichessPlayer {
-                    user: Some(LichessPlayerUser {
-                        name: username.to_string(),
-                        id: username.to_lowercase(),
-                    }),
-                    rating: Some(1525),
-                },
-            },
-            winner: Some("white".to_string()), // User lost
-            created_at: 1672531400000,
-        },
-    ]
-}
-
-fn generate_mock_puzzles() -> Vec<LichessPuzzleRound> {
-    vec![
-        LichessPuzzleRound {
-            date: 1672531100000,
-            win: true,
-            puzzle: LichessPuzzle {
-                id: "puzzle1".to_string(),
-                rating: 1600,
-            },
-        },
-        LichessPuzzleRound {
-            date: 1672531200000,
-            win: true,
-            puzzle: LichessPuzzle {
-                id: "puzzle2".to_string(),
-                rating: 1550,
-            },
-        },
-        LichessPuzzleRound {
-            date: 1672531300000,
-            win: false, // lost
-            puzzle: LichessPuzzle {
-                id: "puzzle3".to_string(),
-                rating: 1580,
-            },
-        },
-        LichessPuzzleRound {
-            date: 1672531400000,
-            win: true,
-            puzzle: LichessPuzzle {
-                id: "puzzle4".to_string(),
-                rating: 1450,
-            },
-        },
-        // We'll generate 30 puzzles here so that user can claim 1 spin (since 25 correct rated puzzles are needed)
-        // Let's generate 26 successful puzzles >= rating
-        LichessPuzzleRound {
-            date: 1672531500000,
-            win: true,
-            puzzle: LichessPuzzle { id: "p5".to_string(), rating: 1530 },
-        },
-        LichessPuzzleRound { date: 1672531600000, win: true, puzzle: LichessPuzzle { id: "p6".to_string(), rating: 1535 } },
-        LichessPuzzleRound { date: 1672531700000, win: true, puzzle: LichessPuzzle { id: "p7".to_string(), rating: 1540 } },
-        LichessPuzzleRound { date: 1672531800000, win: true, puzzle: LichessPuzzle { id: "p8".to_string(), rating: 1545 } },
-        LichessPuzzleRound { date: 1672531900000, win: true, puzzle: LichessPuzzle { id: "p9".to_string(), rating: 1550 } },
-        LichessPuzzleRound { date: 1672532000000, win: true, puzzle: LichessPuzzle { id: "p10".to_string(), rating: 1555 } },
-        LichessPuzzleRound { date: 1672532100000, win: true, puzzle: LichessPuzzle { id: "p11".to_string(), rating: 1560 } },
-        LichessPuzzleRound { date: 1672532200000, win: true, puzzle: LichessPuzzle { id: "p12".to_string(), rating: 1565 } },
-        LichessPuzzleRound { date: 1672532300000, win: true, puzzle: LichessPuzzle { id: "p13".to_string(), rating: 1570 } },
-        LichessPuzzleRound { date: 1672532400000, win: true, puzzle: LichessPuzzle { id: "p14".to_string(), rating: 1575 } },
-        LichessPuzzleRound { date: 1672532500000, win: true, puzzle: LichessPuzzle { id: "p15".to_string(), rating: 1580 } },
-        LichessPuzzleRound { date: 1672532600000, win: true, puzzle: LichessPuzzle { id: "p16".to_string(), rating: 1585 } },
-        LichessPuzzleRound { date: 1672532700000, win: true, puzzle: LichessPuzzle { id: "p17".to_string(), rating: 1590 } },
-        LichessPuzzleRound { date: 1672532800000, win: true, puzzle: LichessPuzzle { id: "p18".to_string(), rating: 1595 } },
-        LichessPuzzleRound { date: 1672532900000, win: true, puzzle: LichessPuzzle { id: "p19".to_string(), rating: 1600 } },
-        LichessPuzzleRound { date: 1672533000000, win: true, puzzle: LichessPuzzle { id: "p20".to_string(), rating: 1605 } },
-        LichessPuzzleRound { date: 1672533100000, win: true, puzzle: LichessPuzzle { id: "p21".to_string(), rating: 1610 } },
-        LichessPuzzleRound { date: 1672533200000, win: true, puzzle: LichessPuzzle { id: "p22".to_string(), rating: 1615 } },
-        LichessPuzzleRound { date: 1672533300000, win: true, puzzle: LichessPuzzle { id: "p23".to_string(), rating: 1620 } },
-        LichessPuzzleRound { date: 1672533400000, win: true, puzzle: LichessPuzzle { id: "p24".to_string(), rating: 1625 } },
-        LichessPuzzleRound { date: 1672533500000, win: true, puzzle: LichessPuzzle { id: "p25".to_string(), rating: 1630 } },
-        LichessPuzzleRound { date: 1672533600000, win: true, puzzle: LichessPuzzle { id: "p26".to_string(), rating: 1635 } },
-        LichessPuzzleRound { date: 1672533700000, win: true, puzzle: LichessPuzzle { id: "p27".to_string(), rating: 1640 } },
-        LichessPuzzleRound {
-            date: 1672533800000,
-            win: true,
-            puzzle: LichessPuzzle { id: "p28".to_string(), rating: 1645 },
-        },
-        LichessPuzzleRound {
-            date: 1672533900000,
-            win: true,
-            puzzle: LichessPuzzle { id: "p29".to_string(), rating: 1650 },
-        },
-        LichessPuzzleRound {
-            date: 1672534000000,
-            win: true,
-            puzzle: LichessPuzzle { id: "p30".to_string(), rating: 1655 },
-        },
-    ]
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LichessFollowedUser {
     pub id: String,
@@ -334,14 +141,6 @@ pub struct LichessFollowedUser {
 }
 
 pub async fn fetch_following(token: &str) -> Result<Vec<String>, reqwest::Error> {
-    if token.is_empty() || token == "mock_token" {
-        return Ok(vec![
-            "strongopponent".to_string(),
-            "easybot".to_string(),
-            "evenopponent".to_string(),
-        ]);
-    }
-
     let client = reqwest::Client::new();
     let response = client
         .get("https://lichess.org/api/rel/following")

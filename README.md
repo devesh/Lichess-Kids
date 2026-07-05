@@ -41,17 +41,11 @@ cargo test
 ```
 
 ### 3. Run Locally
-To run the server locally in developer/mock mode:
+To run the server locally:
 ```bash
 cargo run
 ```
-By default, the server listens on **`http://localhost:64355`**. You can open this address in your browser and use the **Mock Login** fields to test all synchronization and shopping mechanics without needing a registered Lichess OAuth client.
-
-To run with real Lichess OAuth authentication:
-```bash
-LICHESS_CLIENT_ID=your_oauth_client_id \
-cargo run
-```
+By default, the server listens on **`http://localhost:64355`**. You can open this address in your browser to log in using Lichess OAuth2 PKCE.
 
 > [!NOTE]
 > Lichess Kids utilizes Lichess's public OAuth2 with PKCE (Proof Key for Code Exchange) flow. **You do not need to register a client secret, specify a redirect URI environment variable, or request a Lichess API key.** The redirect URI is automatically constructed dynamically from the request headers sent by the client browser or reverse proxy, making deployment simpler and zero-config.
