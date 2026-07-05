@@ -86,83 +86,7 @@ pub async fn get_profile(
     }))
 }
 
-#[derive(Deserialize)]
-pub struct MockLoginRequest {
-    pub username: String,
-    pub avatar_base: Option<String>,
-}
 
-pub async fn mock_login(
-    State(state): State<AppState>,
-    Json(payload): Json<MockLoginRequest>,
-) -> impl IntoResponse {
-    let username = payload.username.trim();
-    if username.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Username cannot be empty" })),
-        )
-            .into_response();
-    }
-
-    let conn = state.db.lock().unwrap();
-    match db::get_user(&conn, username) {
-        Ok(Some(_)) => {
-            // Already exists, just log in by setting cookie
-            let cookie = format!("username={}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax", username);
-            let mut headers = HeaderMap::new();
-            headers.insert("set-cookie", cookie.parse().unwrap());
-            (
-                StatusCode::OK,
-                headers,
-                Json(serde_json::json!({ "success": true, "registered": true, "username": username })),
-            )
-                .into_response()
-        }
-        Ok(None) => {
-            // New user, needs avatar selection
-            if let Some(avatar) = payload.avatar_base {
-                if !state.assets.bases_map.contains_key(&avatar) {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({ "error": "Invalid avatar base" })),
-                    )
-                        .into_response();
-                }
-
-                if let Err(e) = db::create_user(&conn, username, &avatar) {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({ "error": e.to_string() })),
-                    )
-                        .into_response();
-                }
-
-                let cookie = format!("username={}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax", username);
-                let mut headers = HeaderMap::new();
-                headers.insert("set-cookie", cookie.parse().unwrap());
-                (
-                    StatusCode::OK,
-                    headers,
-                    Json(serde_json::json!({ "success": true, "registered": true, "username": username })),
-                )
-                    .into_response()
-            } else {
-                // Return success but indicate avatar selection is required
-                (
-                    StatusCode::OK,
-                    Json(serde_json::json!({ "success": true, "registered": false, "username": username })),
-                )
-                    .into_response()
-            }
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
 
 pub async fn logout() -> impl IntoResponse {
     let cookie = "username=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax";
@@ -424,28 +348,7 @@ pub async fn claim_sync(
         }
     }
 
-    // Automatically link profile if missing
-    if let Some(ref t) = token {
-        let host = headers.get("host")
-            .and_then(|h| h.to_str().ok())
-            .unwrap_or("localhost:64355");
-        let proto = headers.get("x-forwarded-proto")
-            .and_then(|p| p.to_str().ok())
-            .unwrap_or("http");
-        let profile_link = format!("{}://{}/user/{}", proto, host, username);
 
-        if let Ok(pub_p) = lichess::fetch_public_profile(&username).await {
-            let current_links = pub_p.profile.as_ref().and_then(|p| p.links.clone()).unwrap_or_default();
-            if !current_links.contains(&profile_link) {
-                let new_links = if current_links.is_empty() {
-                    profile_link.clone()
-                } else {
-                    format!("{}\n{}", current_links, profile_link)
-                };
-                let _ = lichess::update_profile_links(t, &new_links).await;
-            }
-        }
-    }
 
     // 2. Fetch and evaluate games
     // A spin for every person/bot you beat with rating >= user's rating at time of play
@@ -761,203 +664,6 @@ pub struct FriendProfile {
     pub current_puzzle_rating: i32,
     pub equipped: EquippedItems,
     pub lichess_url: String,
-    pub avatar_svg_url: Option<String>,
-}
-
-async fn try_discover_remote_profile(f_name: &str, db: Arc<Mutex<Connection>>) -> Option<FriendProfile> {
-    // 1. Fetch public profile from Lichess
-    let pub_prof = lichess::fetch_public_profile(f_name).await.ok()?;
-    let links = pub_prof.profile.as_ref()?.links.as_ref()?;
-
-    // 2. Parse links to find LichessKids profile URL candidate
-    let mut remote_url = None;
-    for line in links.lines() {
-        let url_str = line.trim();
-        if url_str.starts_with("http") && url_str.contains(&format!("/user/{}", f_name)) {
-            if let Some(domain) = url_str.split('/').nth(2) {
-                let protocol = if url_str.starts_with("https") { "https" } else { "http" };
-                let nodeinfo_url = format!("{}://{}/.well-known/nodeinfo", protocol, domain);
-
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(2))
-                    .build()
-                    .ok()?;
-
-                if let Ok(res) = client.get(&nodeinfo_url).send().await {
-                    if res.status().is_success() {
-                        #[derive(Deserialize)]
-                        struct NodeInfoLink {
-                            rel: String,
-                            href: String,
-                        }
-                        #[derive(Deserialize)]
-                        struct NodeInfoMeta {
-                            links: Vec<NodeInfoLink>,
-                        }
-                        if let Ok(meta) = res.json::<NodeInfoMeta>().await {
-                            for link in meta.links {
-                                if link.rel.contains("nodeinfo") {
-                                    let href = if link.href.starts_with("http") {
-                                        link.href.clone()
-                                    } else {
-                                        format!("{}://{}{}", protocol, domain, link.href)
-                                    };
-                                    #[derive(Deserialize)]
-                                    struct Software {
-                                        name: String,
-                                        version: String,
-                                    }
-                                    #[derive(Deserialize)]
-                                    struct NodeInfoMetadata {
-                                        peers: Option<Vec<String>>,
-                                    }
-                                    #[derive(Deserialize)]
-                                    struct NodeInfo2 {
-                                        software: Software,
-                                        metadata: Option<NodeInfoMetadata>,
-                                    }
-                                    if let Ok(res2) = client.get(&href).send().await {
-                                        if let Ok(node2) = res2.json::<NodeInfo2>().await {
-                                            if node2.software.name == "lichesskids" {
-                                                remote_url = Some(url_str.to_string());
-                                                
-                                                // Cache this instance in DB
-                                                let conn = db.lock().unwrap();
-                                                let _ = db::insert_known_instance(
-                                                    &conn,
-                                                    domain,
-                                                    &node2.software.name,
-                                                    &node2.software.version,
-                                                );
-
-                                                // Cache peers for discovery (gossip)
-                                                if let Some(metadata) = node2.metadata {
-                                                    if let Some(peers) = metadata.peers {
-                                                        for peer in peers {
-                                                            let _ = db::insert_known_instance(
-                                                                &conn,
-                                                                &peer,
-                                                                "lichesskids",
-                                                                "unknown",
-                                                            );
-                                                        }
-                                                    }
-                                                }
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if remote_url.is_some() {
-            break;
-        }
-    }
-
-    // Fallback: If no candidate URLs are found in Lichess links, try querying all cached known instances directly!
-    if remote_url.is_none() {
-        let instances = {
-            let conn = db.lock().unwrap();
-            db::get_known_instances(&conn).unwrap_or_default()
-        };
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_millis(800)) // Use a short timeout to prevent sync delays
-            .build()
-            .ok()?;
-
-        for inst in instances {
-            // Check HTTPS
-            let url = format!("https://{}/user/{}", inst.domain, f_name);
-            if let Ok(res) = client.get(&url).header("User-Agent", "LichessKids-App/1.0").send().await {
-                if res.status().is_success() {
-                    remote_url = Some(url);
-                    break;
-                }
-            }
-            // Check HTTP
-            let url = format!("http://{}/user/{}", inst.domain, f_name);
-            if let Ok(res) = client.get(&url).header("User-Agent", "LichessKids-App/1.0").send().await {
-                if res.status().is_success() {
-                    remote_url = Some(url);
-                    break;
-                }
-            }
-        }
-    }
-
-    let url = remote_url?;
-
-    // 3. Scrape remote profile page
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .ok()?;
-
-    let res = client.get(&url).header("User-Agent", "LichessKids-App/1.0").send().await.ok()?;
-    let html = res.text().await.ok()?;
-
-    let start_tag = r#"<script type="application/ld+json">"#;
-    let end_tag = "</script>";
-    let start_idx = html.find(start_tag)?;
-    let content = &html[start_idx + start_tag.len()..];
-    let end_idx = content.find(end_tag)?;
-    let json_str = &content[..end_idx].trim();
-
-    #[derive(Deserialize)]
-    struct PersonSchema {
-        description: Option<String>,
-        image: Option<String>,
-    }
-    #[derive(Deserialize)]
-    struct ProfilePageSchema {
-        #[serde(rename = "mainEntity")]
-        main_entity: PersonSchema,
-    }
-
-    let schema: ProfilePageSchema = serde_json::from_str(json_str).ok()?;
-    let desc = schema.main_entity.description?;
-    let avatar_svg_url = schema.main_entity.image;
-
-    let mut avatar_base = "cat".to_string();
-    let mut equipped = EquippedItems::default();
-
-    for part in desc.split(';') {
-        let kv: Vec<&str> = part.split(':').collect();
-        if kv.len() == 2 {
-            let key = kv[0].trim();
-            let val = kv[1].trim().to_string();
-            if !val.is_empty() {
-                match key {
-                    "avatar_base" => avatar_base = val,
-                    "top" => equipped.top = Some(val),
-                    "bottom" => equipped.bottom = Some(val),
-                    "hat" => equipped.hat = Some(val),
-                    "hair" => equipped.hair = Some(val),
-                    "accessory" => equipped.accessory = Some(val),
-                    "background" => equipped.background = Some(val),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    let g_rate = pub_prof.perfs.blitz.or(pub_prof.perfs.rapid).map(|x| x.rating).unwrap_or(1500);
-    let p_rate = pub_prof.perfs.puzzle.map(|x| x.rating).unwrap_or(1500);
-
-    Some(FriendProfile {
-        username: f_name.to_string(),
-        avatar_base,
-        current_game_rating: g_rate,
-        current_puzzle_rating: p_rate,
-        equipped,
-        lichess_url: format!("https://lichess.org/@/{}", f_name),
-        avatar_svg_url,
-    })
 }
 
 pub async fn get_friends(
@@ -979,13 +685,13 @@ pub async fn get_friends(
         .ok()
     };
 
-    let followed = match lichess::fetch_following(&token.unwrap_or_else(|| "mock_token".to_string())).await {
+    let token_str = token.unwrap_or_default();
+    let followed = match lichess::fetch_following(&token_str).await {
         Ok(lst) => lst,
         Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Following fetch failed: {}", e) })))),
     };
 
     let mut friends_profiles = Vec::new();
-    let mut futures = Vec::new();
 
     for f_name in followed {
         // Check local DB
@@ -1006,39 +712,11 @@ pub async fn get_friends(
                 current_puzzle_rating: user.current_puzzle_rating,
                 equipped,
                 lichess_url: format!("https://lichess.org/@/{}", f_name),
-                avatar_svg_url: None,
             });
-        } else {
-            // Check remote profile page discovery
-            let f_name_clone = f_name.clone();
-            let db_clone = state.db.clone();
-            futures.push(tokio::spawn(async move {
-                // If it fails or is remote, try to discover it
-                try_discover_remote_profile(&f_name_clone, db_clone).await
-            }));
-        }
-    }
-
-    for handle in futures {
-        if let Ok(Some(prof)) = handle.await {
-            friends_profiles.push(prof);
         }
     }
 
     Ok(Json(friends_profiles))
-}
-
-pub async fn get_network_instances(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let conn = state.db.lock().unwrap();
-    match db::get_known_instances(&conn) {
-        Ok(instances) => Ok(Json(instances)),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )),
-    }
 }
 
 pub async fn get_assets_catalog(
@@ -1069,75 +747,7 @@ pub async fn delete_friend(
     (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Unfollow players directly on Lichess to remove them from Lichess Kids!" }))).into_response()
 }
 
-// -------------------------------------------------------------
-// FEDERATION / NODEINFO / PROFILE SCRAPING
-// -------------------------------------------------------------
 
-pub async fn get_well_known_nodeinfo(
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let host = headers.get("host")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("localhost:3000");
-    
-    let proto = headers.get("x-forwarded-proto")
-        .and_then(|p| p.to_str().ok())
-        .unwrap_or("http");
-
-    let href = format!("{}://{}/nodeinfo/2.0", proto, host);
-    let json = serde_json::json!({
-        "links": [
-            {
-                "rel": "http://nodeinfo.diaspora.software/ns/schema/2.0",
-                "href": href
-            }
-        ]
-    });
-    (StatusCode::OK, Json(json))
-}
-
-pub async fn get_nodeinfo_2_0(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    let user_count = {
-        let conn = state.db.lock().unwrap();
-        conn.query_row("SELECT COUNT(*) FROM users", params![], |row| row.get::<_, i64>(0)).unwrap_or(0)
-    };
-
-    let peers = {
-        let conn = state.db.lock().unwrap();
-        db::get_known_instances(&conn)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|ki| ki.domain)
-            .collect::<Vec<String>>()
-    };
-
-    let json = serde_json::json!({
-        "version": "2.0",
-        "software": {
-            "name": "lichesskids",
-            "version": "0.1.0"
-        },
-        "protocols": [
-            "http"
-        ],
-        "services": {
-            "inbound": [],
-            "outbound": []
-        },
-        "openRegistrations": true,
-        "usage": {
-            "users": {
-                "total": user_count
-            }
-        },
-        "metadata": {
-            "peers": peers
-        }
-    });
-    (StatusCode::OK, Json(json))
-}
 
 pub async fn get_user_profile_html(
     Path(username): Path<String>,

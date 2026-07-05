@@ -6,13 +6,10 @@ Lichess Kids is a gamified companion application for younger chess players. By w
 
 ## ✨ Key Features
 
-*   **Lichess OAuth2 & Mock Login**: Authenticate securely using real Lichess OAuth2 (with PKCE) or bypass it instantly using Developer/Mock Login for local testing.
+*   **Lichess OAuth2 Login**: Authenticate securely using real Lichess OAuth2 (with PKCE).
 *   **Aesthetic Wheel Payouts**: Spend earned spins on an animated chess fortune wheel that awards coins matching piece values: Pawn (1c), Knight (3c), Bishop (3c), Rook (5c), or Queen (9c).
 *   **Interactive Shop & Avatar Customizer**: Purchase clothing (tops, bottoms, hats, hair, accessories, and backgrounds) and wear them. The avatar preview stacks vector layers dynamically using absolute CSS positioning.
-*   **Federated Friends Discovery**:
-    *   No manual friends lists! The app automatically syncs the accounts you follow on Lichess who have a Lichess Kids profile.
-    *   Discovers remote profiles by searching the followed player's Lichess profile links.
-    *   Validates instance software via standard `/.well-known/nodeinfo` and scrapes Schema.org `ProfilePage` structured JSON-LD markup to render remote custom avatars natively.
+*   **Local Friends Discovery**: Sync followed users automatically from Lichess. If a followed user has a local Lichess Kids profile registered on this instance, they will automatically appear in your friends list with their custom equipped avatar.
 *   **Robust Backend**: Written in Rust using the Axum framework and SQLite (`rusqlite`) database with concurrent transaction locks.
 *   **Modern DevOps**: Includes multi-stage Docker builds, rootless Podman Quadlet configuration, and a GitHub Actions CI test pipeline.
 
@@ -126,9 +123,7 @@ Spins cannot be awarded for daily logins or daily check-ins. Lichess Kids is des
 
 ### 4. Reverse Proxy & SSL Configuration (Recommended)
 
-To ensure secure connection delivery (HTTPS) and proper routing for federated instance requests, **it is highly recommended to run this server behind a reverse proxy (such as Nginx, Traefik, or Caddy) or a Cloudflare tunnel.**
-
-Since the Lichess Kids federation mechanism extracts browser request headers (`Host` and `X-Forwarded-Proto`) to dynamically construct absolute URLs for its profile discovery cards and NodeInfo feeds, your reverse proxy must forward these headers correctly.
+To ensure secure connection delivery (HTTPS), **it is highly recommended to run this server behind a reverse proxy (such as Nginx, Traefik, or Caddy) or a Cloudflare tunnel.**
 
 We provide copy-pasteable configuration templates in the `deploy/reverse-proxy/` directory:
 *   **[Nginx (Debian sites-available style)](file:///home/devesh/projects/lichesskids/deploy/reverse-proxy/nginx.conf)**: Configures ports `80`/`443`, handles the ACME Let's Encrypt directory verification challenges, redirects traffic to HTTPS, and maps headers.

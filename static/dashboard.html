@@ -162,17 +162,6 @@
                     <div class="shop-catalog shop-tab-content" id="tab-background"></div>
                 </div>
             </div>
-
-            <!-- FEDERATED NETWORK PANEL -->
-            <div class="glass-panel" style="margin-top: 10px;">
-                <h2>Federated Network Directory</h2>
-                <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 15px;">
-                    These are peer LichessKids instances discovered via follower profiles on the network.
-                </p>
-                <div id="network-instances-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 15px;">
-                    <!-- Discovered instances loaded here -->
-                </div>
-            </div>
         </div>
     </div>
 
@@ -373,8 +362,7 @@
                 // Load Friends List
                 loadFriends();
 
-                // Load Federated Network
-                loadNetwork();
+
 
             } catch (err) {
                 console.error(err);
@@ -714,11 +702,7 @@
 
                     // Render friend's miniature avatar
                     const avatarContainer = document.getElementById(`svg-friend-${friend.username}`);
-                    if (friend.avatar_svg_url) {
-                        avatarContainer.innerHTML = `<img src="${friend.avatar_svg_url}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: contain;" />`;
-                    } else {
-                        renderAvatar(avatarContainer, friend.avatar_base, friend.equipped);
-                    }
+                    renderAvatar(avatarContainer, friend.avatar_base, friend.equipped);
                 });
 
             } catch (err) {
@@ -726,66 +710,7 @@
             }
         }
 
-        // -------------------------------------------------------------
-        // FEDERATED NETWORK
-        // -------------------------------------------------------------
 
-        async function loadNetwork() {
-            const list = document.getElementById('network-instances-list');
-            try {
-                const res = await fetch('/api/network/instances');
-                const instances = await res.json();
-                list.innerHTML = '';
-
-                if (instances.length === 0) {
-                    list.innerHTML = '<p style="color:var(--text-secondary);font-size:0.9rem;grid-column:1/-1;text-align:center;margin:10px 0;">No federated instances discovered yet.</p>';
-                    return;
-                }
-
-                instances.forEach(inst => {
-                    const card = document.createElement('div');
-                    card.style.background = 'rgba(255, 255, 255, 0.03)';
-                    card.style.border = '1px solid var(--border-color)';
-                    card.style.borderRadius = '12px';
-                    card.style.padding = '12px 15px';
-                    card.style.display = 'flex';
-                    card.style.flexDirection = 'column';
-                    card.style.gap = '6px';
-                    card.style.boxShadow = '0 4px 10px rgba(0,0,0,0.15)';
-
-                    // Format date nicely
-                    let dateStr = 'unknown';
-                    if (inst.last_seen) {
-                        try {
-                            const d = new Date(inst.last_seen + ' UTC');
-                            dateStr = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                        } catch(e) {
-                            dateStr = inst.last_seen;
-                        }
-                    }
-
-                    // Highlight verified software name
-                    const nameColor = inst.software === 'lichesskids' ? 'var(--success)' : 'var(--text-secondary)';
-
-                    card.innerHTML = `
-                        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid var(--border-color); padding-bottom:6px; margin-bottom:4px;">
-                            <span style="font-weight:700; color:var(--accent); font-size:0.95rem; word-break:break-all;">${inst.domain}</span>
-                            <span style="font-size:0.7rem; padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.25); color:${nameColor}; font-weight:600; text-transform:uppercase;">
-                                ${inst.software}
-                            </span>
-                        </div>
-                        <div style="font-size:0.8rem; display:flex; flex-direction:column; gap:3px; color:var(--text-secondary);">
-                            <div>Version: <span style="color:var(--text-primary); font-family:monospace;">${inst.version}</span></div>
-                            <div>Last Ping: <span style="color:var(--text-primary); font-size:0.75rem;">${dateStr}</span></div>
-                        </div>
-                    `;
-                    list.appendChild(card);
-                });
-            } catch(e) {
-                console.error("Failed to load network instances", e);
-                list.innerHTML = '<p style="color:var(--red-color);font-size:0.9rem;grid-column:1/-1;">Error loading network directory.</p>';
-            }
-        }
 
         // -------------------------------------------------------------
         // LOG OUT

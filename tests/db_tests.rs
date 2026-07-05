@@ -137,30 +137,7 @@ fn test_friends() {
     assert_eq!(friends.len(), 0);
 }
 
-#[test]
-fn test_known_instances() {
-    let conn = setup_in_memory_db();
 
-    // Check empty initially
-    let instances = db::get_known_instances(&conn).unwrap();
-    assert_eq!(instances.len(), 0);
-
-    // Insert instance
-    db::insert_known_instance(&conn, "lichesskids.org", "lichesskids", "0.1.0").unwrap();
-
-    // Retrieve and assert details
-    let instances = db::get_known_instances(&conn).unwrap();
-    assert_eq!(instances.len(), 1);
-    assert_eq!(instances[0].domain, "lichesskids.org");
-    assert_eq!(instances[0].software, "lichesskids");
-    assert_eq!(instances[0].version, "0.1.0");
-
-    // Update instance details
-    db::insert_known_instance(&conn, "lichesskids.org", "lichesskids", "0.2.0").unwrap();
-    let instances = db::get_known_instances(&conn).unwrap();
-    assert_eq!(instances.len(), 1);
-    assert_eq!(instances[0].version, "0.2.0");
-}
 
 #[test]
 fn test_asset_catalog() {

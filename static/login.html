@@ -22,21 +22,6 @@
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>
                 Log In with Lichess Account
             </button>
-
-            <div style="display: flex; align-items: center; justify-content: center; margin: 25px 0; gap: 15px;">
-                <div style="flex-grow: 1; height: 1px; background: var(--border-color);"></div>
-                <span style="color: var(--text-secondary); font-size: 0.9rem; font-weight: 600;">OR TEST LOCALLY</span>
-                <div style="flex-grow: 1; height: 1px; background: var(--border-color);"></div>
-            </div>
-
-            <div style="text-align: left;">
-                <label for="mock-username" style="display: block; margin-bottom: 8px; font-weight: 600; font-size: 0.95rem; color: var(--text-secondary);">Enter any username to test</label>
-                <div style="display: flex; gap: 10px;">
-                    <input type="text" id="mock-username" class="input-field" placeholder="e.g. kid_chess_champ" style="flex-grow: 1;">
-                    <button id="mock-login-btn" class="btn btn-secondary">Mock Log In</button>
-                </div>
-            </div>
-            
             <div id="error-message" style="color: var(--error); margin-top: 15px; font-weight: 600; font-size: 0.95rem; display: none;"></div>
         </div>
     </div>
@@ -64,36 +49,6 @@
             } catch (err) {
                 console.error(err);
                 alert('Error starting Lichess OAuth flow');
-            }
-        });
-
-        // Mock Login for local testing
-        document.getElementById('mock-login-btn').addEventListener('click', async () => {
-            const username = document.getElementById('mock-username').value.trim();
-            if (!username) {
-                alert('Please enter a username');
-                return;
-            }
-            try {
-                const res = await fetch('/api/mock/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username: username })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    if (data.registered) {
-                        window.location.href = '/dashboard.html';
-                    } else {
-                        // Redirect to select avatar for first login
-                        window.location.href = `/select-avatar.html?mock=true&username=${encodeURIComponent(username)}`;
-                    }
-                } else {
-                    alert(data.error || 'Failed to mock login');
-                }
-            } catch (err) {
-                console.error(err);
-                alert('Error connecting to local server');
             }
         });
     </script>

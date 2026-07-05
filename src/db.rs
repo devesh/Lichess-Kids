@@ -100,17 +100,6 @@ pub fn init_db(db_path: &str) -> Result<Connection> {
         [],
     )?;
 
-    // Create known_instances table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS known_instances (
-            domain TEXT PRIMARY KEY,
-            software TEXT NOT NULL,
-            version TEXT NOT NULL,
-            last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );",
-        [],
-    )?;
-
     // Migration: Add last_daily_spin_claim column to users if it doesn't exist
     let _ = conn.execute("ALTER TABLE users ADD COLUMN last_daily_spin_claim TEXT DEFAULT '';", []);
 
@@ -336,39 +325,6 @@ pub fn delete_friend(conn: &Connection, username: &str, friend_username: &str) -
     Ok(rows_affected > 0)
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct KnownInstance {
-    pub domain: String,
-    pub software: String,
-    pub version: String,
-    pub last_seen: String,
-}
 
-pub fn insert_known_instance(conn: &Connection, domain: &str, software: &str, version: &str) -> Result<()> {
-    conn.execute(
-        "INSERT OR REPLACE INTO known_instances (domain, software, version, last_seen)
-         VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)",
-        params![domain, software, version],
-    )?;
-    Ok(())
-}
 
-pub fn get_known_instances(conn: &Connection) -> Result<Vec<KnownInstance>> {
-    let mut stmt = conn.prepare(
-        "SELECT domain, software, version, last_seen FROM known_instances ORDER BY last_seen DESC"
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(KnownInstance {
-            domain: row.get(0)?,
-            software: row.get(1)?,
-            version: row.get(2)?,
-            last_seen: row.get(3)?,
-        })
-    })?;
-    let mut instances = Vec::new();
-    for row in rows {
-        instances.push(row?);
-    }
-    Ok(instances)
-}
 

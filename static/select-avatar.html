@@ -70,37 +70,18 @@
         submitBtn.addEventListener('click', async () => {
             if (!selectedAvatar) return;
 
-            const urlParams = new URLSearchParams(window.location.search);
-            const isMock = urlParams.get('mock') === 'true';
-            const mockUsername = urlParams.get('username');
-
             try {
-                if (isMock && mockUsername) {
-                    // Local Mock Mode complete registration
-                    const res = await fetch('/api/mock/login', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ username: mockUsername, avatar_base: selectedAvatar })
-                    });
-                    const data = await res.json();
-                    if (data.success) {
-                        window.location.href = '/dashboard.html';
-                    } else {
-                        alert(data.error || 'Failed to select avatar');
-                    }
+                // Real OAuth complete registration
+                const res = await fetch('/api/select-avatar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ avatar_base: selectedAvatar })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    window.location.href = '/dashboard.html';
                 } else {
-                    // Real OAuth complete registration
-                    const res = await fetch('/api/select-avatar', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ avatar_base: selectedAvatar })
-                    });
-                    const data = await res.json();
-                    if (data.success) {
-                        window.location.href = '/dashboard.html';
-                    } else {
-                        alert(data.error || 'Failed to select avatar');
-                    }
+                    alert(data.error || 'Failed to select avatar');
                 }
             } catch (err) {
                 console.error(err);

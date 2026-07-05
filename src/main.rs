@@ -11,9 +11,8 @@ use tower_http::services::ServeDir;
 use lichesskids::db;
 use lichesskids::routes::{
     add_friend, buy_item, claim_sync, delete_friend, equip_item, get_friends, get_profile,
-    get_shop, logout, mock_login, oauth_callback, oauth_start, select_avatar, spin_wheel,
-    get_well_known_nodeinfo, get_nodeinfo_2_0, get_user_profile_html, get_avatar_svg,
-    get_network_instances, get_assets_catalog, AppState,
+    get_shop, logout, oauth_callback, oauth_start, select_avatar, spin_wheel,
+    get_user_profile_html, get_avatar_svg, get_assets_catalog, AppState,
 };
 
 #[tokio::main]
@@ -40,15 +39,11 @@ async fn main() {
 
     // 3. Create Router
     let app = Router::new()
-        // Federation and NodeInfo Discovery
-        .route("/.well-known/nodeinfo", get(get_well_known_nodeinfo))
-        .route("/nodeinfo/2.0", get(get_nodeinfo_2_0))
         // Server-rendered profiles and SVG generator
         .route("/user/:username", get(get_user_profile_html))
         .route("/api/avatar-svg/:username", get(get_avatar_svg))
         // API Routes
         .route("/api/profile", get(get_profile))
-        .route("/api/mock/login", post(mock_login))
         .route("/api/logout", post(logout))
         .route("/api/oauth/start", post(oauth_start))
         .route("/api/oauth/callback", get(oauth_callback))
@@ -61,7 +56,6 @@ async fn main() {
         .route("/api/friends", get(get_friends))
         .route("/api/friends/add", post(add_friend))
         .route("/api/friends/delete", post(delete_friend))
-        .route("/api/network/instances", get(get_network_instances))
         .route("/api/assets/catalog", get(get_assets_catalog))
         // Serve static assets
         .nest_service("/static", ServeDir::new("static"))

@@ -313,24 +313,8 @@ pub struct LichessFollowedUser {
     pub username: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct LichessPublicProfileDetails {
-    pub country: Option<String>,
-    pub location: Option<String>,
-    pub bio: Option<String>,
-    pub links: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct LichessPublicProfile {
-    pub id: String,
-    pub username: String,
-    pub perfs: LichessPerfs,
-    pub profile: Option<LichessPublicProfileDetails>,
-}
-
 pub async fn fetch_following(token: &str) -> Result<Vec<String>, reqwest::Error> {
-    if token == "mock_token" {
+    if token.is_empty() || token == "mock_token" {
         return Ok(vec![
             "strongopponent".to_string(),
             "easybot".to_string(),
@@ -358,51 +342,5 @@ pub async fn fetch_following(token: &str) -> Result<Vec<String>, reqwest::Error>
     Ok(followed)
 }
 
-pub async fn fetch_public_profile(username: &str) -> Result<LichessPublicProfile, reqwest::Error> {
-    if username == "strongopponent" || username == "easybot" || username == "evenopponent" {
-        return Ok(LichessPublicProfile {
-            id: username.to_string(),
-            username: username.to_string(),
-            perfs: LichessPerfs {
-                puzzle: Some(LichessPerf { rating: 1550 }),
-                blitz: Some(LichessPerf { rating: 1550 }),
-                bullet: Some(LichessPerf { rating: 1500 }),
-                rapid: Some(LichessPerf { rating: 1550 }),
-            },
-            profile: Some(LichessPublicProfileDetails {
-                country: Some("US".to_string()),
-                location: Some("Localhost".to_string()),
-                bio: Some("Mock profile".to_string()),
-                links: Some(format!("http://127.0.0.1:3000/user/{}", username)),
-            }),
-        });
-    }
 
-    let client = reqwest::Client::new();
-    let response = client
-        .get(format!("https://lichess.org/api/user/{}", username))
-        .header("User-Agent", "LichessKids-App/1.0")
-        .send()
-        .await?;
-
-    response.error_for_status()?.json::<LichessPublicProfile>().await
-}
-
-pub async fn update_profile_links(token: &str, links: &str) -> Result<(), reqwest::Error> {
-    if token == "mock_token" {
-        return Ok(());
-    }
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://lichess.org/api/me/profile")
-        .bearer_auth(token)
-        .header("User-Agent", "LichessKids-App/1.0")
-        .form(&[("links", links)])
-        .send()
-        .await?;
-
-    let _ = response.error_for_status();
-    Ok(())
-}
 
