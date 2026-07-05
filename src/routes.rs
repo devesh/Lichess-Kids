@@ -401,7 +401,7 @@ pub async fn claim_sync(
     }
 
     let token_str = token.unwrap_or_else(|| "mock_token".to_string());
-    let puzzles = match lichess::fetch_puzzle_activity(&token_str).await {
+    let puzzles = match lichess::fetch_puzzle_activity(&token_str, Some(last_synced_at)).await {
         Ok(p) => p,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Puzzles fetch failed: {}", e) }))).into_response(),
     };
