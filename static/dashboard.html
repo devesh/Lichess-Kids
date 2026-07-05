@@ -350,7 +350,7 @@
                 updateEquippedList();
 
                 // Update profile link sharing helper
-                const profileLink = window.location.origin + "/profile/" + userProfile.username;
+                const profileLink = window.location.origin + "/user/" + userProfile.username;
                 const linkEl = document.getElementById('copy-profile-link');
                 if (linkEl) {
                     linkEl.innerText = profileLink;

@@ -432,7 +432,7 @@ pub async fn claim_sync(
         let proto = headers.get("x-forwarded-proto")
             .and_then(|p| p.to_str().ok())
             .unwrap_or("http");
-        let profile_link = format!("{}://{}/profile/{}", proto, host, username);
+        let profile_link = format!("{}://{}/user/{}", proto, host, username);
 
         if let Ok(pub_p) = lichess::fetch_public_profile(&username).await {
             let current_links = pub_p.profile.as_ref().and_then(|p| p.links.clone()).unwrap_or_default();
