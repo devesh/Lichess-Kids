@@ -289,8 +289,102 @@ fn generate_mock_puzzles() -> Vec<LichessPuzzleRound> {
         LichessPuzzleRound { date: 1672533500000, win: true, puzzle: LichessPuzzle { id: "p25".to_string(), rating: 1630 } },
         LichessPuzzleRound { date: 1672533600000, win: true, puzzle: LichessPuzzle { id: "p26".to_string(), rating: 1635 } },
         LichessPuzzleRound { date: 1672533700000, win: true, puzzle: LichessPuzzle { id: "p27".to_string(), rating: 1640 } },
-        LichessPuzzleRound { date: 1672533800000, win: true, puzzle: LichessPuzzle { id: "p28".to_string(), rating: 1645 } },
-        LichessPuzzleRound { date: 1672533900000, win: true, puzzle: LichessPuzzle { id: "p29".to_string(), rating: 1650 } },
-        LichessPuzzleRound { date: 1672534000000, win: true, puzzle: LichessPuzzle { id: "p30".to_string(), rating: 1655 } },
+        LichessPuzzleRound {
+            date: 1672533800000,
+            win: true,
+            puzzle: LichessPuzzle { id: "p28".to_string(), rating: 1645 },
+        },
+        LichessPuzzleRound {
+            date: 1672533900000,
+            win: true,
+            puzzle: LichessPuzzle { id: "p29".to_string(), rating: 1650 },
+        },
+        LichessPuzzleRound {
+            date: 1672534000000,
+            win: true,
+            puzzle: LichessPuzzle { id: "p30".to_string(), rating: 1655 },
+        },
     ]
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LichessFollowedUser {
+    pub id: String,
+    pub username: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LichessPublicProfileDetails {
+    pub country: Option<String>,
+    pub location: Option<String>,
+    pub bio: Option<String>,
+    pub links: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LichessPublicProfile {
+    pub id: String,
+    pub username: String,
+    pub perfs: LichessPerfs,
+    pub profile: Option<LichessPublicProfileDetails>,
+}
+
+pub async fn fetch_following(token: &str) -> Result<Vec<String>, reqwest::Error> {
+    if token == "mock_token" {
+        return Ok(vec![
+            "strongopponent".to_string(),
+            "easybot".to_string(),
+            "evenopponent".to_string(),
+        ]);
+    }
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://lichess.org/api/rel/following")
+        .bearer_auth(token)
+        .header("User-Agent", "LichessKids-App/1.0")
+        .send()
+        .await?;
+
+    let text = response.error_for_status()?.text().await?;
+    let mut followed = Vec::new();
+    for line in text.lines() {
+        if !line.trim().is_empty() {
+            if let Ok(user) = serde_json::from_str::<LichessFollowedUser>(line) {
+                followed.push(user.username);
+            }
+        }
+    }
+    Ok(followed)
+}
+
+pub async fn fetch_public_profile(username: &str) -> Result<LichessPublicProfile, reqwest::Error> {
+    if username == "strongopponent" || username == "easybot" || username == "evenopponent" {
+        return Ok(LichessPublicProfile {
+            id: username.to_string(),
+            username: username.to_string(),
+            perfs: LichessPerfs {
+                puzzle: Some(LichessPerf { rating: 1550 }),
+                blitz: Some(LichessPerf { rating: 1550 }),
+                bullet: Some(LichessPerf { rating: 1500 }),
+                rapid: Some(LichessPerf { rating: 1550 }),
+            },
+            profile: Some(LichessPublicProfileDetails {
+                country: Some("US".to_string()),
+                location: Some("Localhost".to_string()),
+                bio: Some("Mock profile".to_string()),
+                links: Some(format!("http://127.0.0.1:3000/user/{}", username)),
+            }),
+        });
+    }
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("https://lichess.org/api/user/{}", username))
+        .header("User-Agent", "LichessKids-App/1.0")
+        .send()
+        .await?;
+
+    response.error_for_status()?.json::<LichessPublicProfile>().await
+}
+

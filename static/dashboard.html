@@ -115,11 +115,10 @@
 
                 <!-- FRIENDS PANEL -->
                 <div class="glass-panel" style="display: flex; flex-direction: column;">
-                    <h2>Friends List</h2>
-                    <div style="display: flex; gap: 10px; margin-bottom: 20px;">
-                        <input type="text" id="friend-username-input" class="input-field" placeholder="Lichess username..." style="padding: 8px 12px; font-size: 0.9rem;">
-                        <button id="add-friend-btn" class="btn btn-primary" style="padding: 8px 16px; font-size: 0.9rem;">Add</button>
-                    </div>
+                    <h2>Followed Players</h2>
+                    <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 15px; line-height: 1.4;">
+                        Your friends list is automatically synced from the players you follow on Lichess who have a Lichess Kids profile.
+                    </p>
                     <div id="friends-list-container" class="friends-list" style="flex-grow: 1; overflow-y: auto; max-height: 260px;">
                         <!-- Friends loaded here -->
                     </div>
@@ -618,8 +617,6 @@
         // FRIENDS LIST
         // -------------------------------------------------------------
 
-        const addFriendBtn = document.getElementById('add-friend-btn');
-        const friendInput = document.getElementById('friend-username-input');
         const friendsList = document.getElementById('friends-list-container');
 
         async function loadFriends() {
@@ -629,7 +626,7 @@
                 friendsList.innerHTML = '';
 
                 if (friends.length === 0) {
-                    friendsList.innerHTML = '<p style="color:var(--text-secondary);font-size:0.9rem;text-align:center;margin-top:20px;">No friends added yet!</p>';
+                    friendsList.innerHTML = '<p style="color:var(--text-secondary);font-size:0.9rem;text-align:center;margin-top:20px;">No followed players found with a Lichess Kids profile.</p>';
                     return;
                 }
 
@@ -646,7 +643,6 @@
                         </div>
                         <div style="display:flex; gap:10px; align-items:center;">
                             <a href="${friend.lichess_url}" target="_blank" class="btn btn-secondary" style="padding: 6px 12px; font-size: 0.8rem; border-color: var(--knight-color); color: var(--knight-color);">Lichess</a>
-                            <button class="unequip-btn delete-friend-btn" data-username="${friend.username}" style="padding: 6px 12px; font-size:0.8rem;">Remove</button>
                         </div>
                     `;
                     friendsList.appendChild(card);
@@ -655,51 +651,6 @@
                     renderAvatar(document.getElementById(`svg-friend-${friend.username}`), friend.avatar_base, friend.equipped);
                 });
 
-                // Hook delete buttons
-                document.querySelectorAll('.delete-friend-btn').forEach(btn => {
-                    btn.addEventListener('click', () => removeFriend(btn.dataset.username));
-                });
-
-            } catch (err) {
-                console.error(err);
-            }
-        }
-
-        addFriendBtn.addEventListener('click', async () => {
-            const friendName = friendInput.value.trim();
-            if (!friendName) return;
-            
-            try {
-                const res = await fetch('/api/friends/add', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ friend_username: friendName })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    friendInput.value = '';
-                    loadFriends();
-                } else {
-                    alert(data.error || 'Failed to add friend');
-                }
-            } catch (err) {
-                console.error(err);
-            }
-        });
-
-        async function removeFriend(friendName) {
-            try {
-                const res = await fetch('/api/friends/delete', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ friend_username: friendName })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    loadFriends();
-                } else {
-                    alert(data.error || 'Failed to remove friend');
-                }
             } catch (err) {
                 console.error(err);
             }
