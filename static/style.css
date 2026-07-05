@@ -318,6 +318,15 @@ header {
     transform: translate(-50%, -50%) scale(0.9);
 }
 
+.wheel-spin-btn:disabled {
+    background: #494949;
+    color: #888888;
+    border-color: #333333;
+    box-shadow: none;
+    cursor: not-allowed;
+    transform: translate(-50%, -50%) scale(1) !important;
+}
+
 /* Shop and catalog items */
 .shop-catalog {
     display: grid;
