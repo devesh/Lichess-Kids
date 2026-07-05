@@ -1,4 +1,4 @@
-use lichesskids::db::{self, EquippedItems};
+use lichesskids::db;
 
 fn setup_in_memory_db() -> rusqlite::Connection {
     db::init_db(":memory:").expect("Failed to initialize in-memory DB")
