@@ -73,7 +73,7 @@ pub async fn fetch_profile(token: &str) -> Result<LichessProfile, reqwest::Error
     response.error_for_status()?.json::<LichessProfile>().await
 }
 
-pub async fn fetch_games(username: &str, token: Option<&str>, since: Option<i64>, max_games: u32) -> Result<Vec<LichessGame>, reqwest::Error> {
+pub async fn fetch_games(username: &str, token: Option<&str>, since: Option<i64>) -> Result<Vec<LichessGame>, reqwest::Error> {
     // If username is mock_user or starts with mock, return mock games
     if username.starts_with("mock_") || token.is_none() || token == Some("mock_token") {
         let mock_games = generate_mock_games(username);
@@ -86,9 +86,9 @@ pub async fn fetch_games(username: &str, token: Option<&str>, since: Option<i64>
     let client = reqwest::Client::new();
     let mut query = vec![("rated", "true".to_string())];
     if let Some(s) = since {
-        query.push(("since", s.to_string()));
-    } else {
-        query.push(("max", max_games.to_string()));
+        if s > 0 {
+            query.push(("since", s.to_string()));
+        }
     }
 
     let response = client
@@ -113,7 +113,7 @@ pub async fn fetch_games(username: &str, token: Option<&str>, since: Option<i64>
     Ok(games)
 }
 
-pub async fn fetch_puzzle_activity(token: &str, max_puzzles: u32) -> Result<Vec<LichessPuzzleRound>, reqwest::Error> {
+pub async fn fetch_puzzle_activity(token: &str) -> Result<Vec<LichessPuzzleRound>, reqwest::Error> {
     // If token is mock_token, return mock puzzle activities
     if token == "mock_token" {
         return Ok(generate_mock_puzzles());
@@ -122,7 +122,7 @@ pub async fn fetch_puzzle_activity(token: &str, max_puzzles: u32) -> Result<Vec<
     let client = reqwest::Client::new();
     let response = client
         .get("https://lichess.org/api/puzzle/activity")
-        .query(&[("max", max_puzzles.to_string())])
+        .query(&[("max", "1000")])
         .bearer_auth(token)
         .header("User-Agent", "LichessKids-App/1.0")
         .send()

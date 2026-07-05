@@ -357,7 +357,7 @@ pub async fn claim_sync(
 
     // 2. Fetch and evaluate games
     // A spin for every person/bot you beat with rating >= user's rating at time of play
-    let games = match lichess::fetch_games(&username, token.as_deref(), Some(last_synced_at), 30).await {
+    let games = match lichess::fetch_games(&username, token.as_deref(), Some(last_synced_at)).await {
         Ok(g) => g,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Games fetch failed: {}", e) }))).into_response(),
     };
@@ -401,7 +401,7 @@ pub async fn claim_sync(
     }
 
     let token_str = token.unwrap_or_else(|| "mock_token".to_string());
-    let puzzles = match lichess::fetch_puzzle_activity(&token_str, 50).await {
+    let puzzles = match lichess::fetch_puzzle_activity(&token_str).await {
         Ok(p) => p,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Puzzles fetch failed: {}", e) }))).into_response(),
     };
