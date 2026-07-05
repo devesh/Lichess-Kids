@@ -320,7 +320,7 @@ pub async fn claim_sync(
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Not logged in" }))).into_response(),
     };
 
-    let (token, mut puzzle_rating) = {
+    let (token, mut puzzle_rating, last_synced_at) = {
         let conn = state.db.lock().unwrap();
         let token: Option<String> = conn
             .query_row(
@@ -331,11 +331,18 @@ pub async fn claim_sync(
             .ok();
 
         let mut p_rate = 1500;
+        let mut l_sync = 0;
         if let Some(user) = db::get_user(&conn, &username).unwrap() {
             p_rate = user.current_puzzle_rating;
+            l_sync = user.last_synced_at;
         }
-        (token, p_rate)
+        (token, p_rate, l_sync)
     };
+
+    let sync_start_time = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
 
     // 1. Fetch user's rating profile
     if let Some(ref t) = token {
@@ -348,15 +355,14 @@ pub async fn claim_sync(
         }
     }
 
-
-
     // 2. Fetch and evaluate games
     // A spin for every person/bot you beat with rating >= user's rating at time of play
-    let games = match lichess::fetch_games(&username, token.as_deref(), 30).await {
+    let games = match lichess::fetch_games(&username, token.as_deref(), Some(last_synced_at), 30).await {
         Ok(g) => g,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Games fetch failed: {}", e) }))).into_response(),
     };
 
+    let mut games_eligible = 0;
     let mut games_claimed = 0;
     {
         let conn = state.db.lock().unwrap();
@@ -384,6 +390,7 @@ pub async fn claim_sync(
             if let (Some(u_rate), Some(o_rate)) = (user_game_rating, opp_game_rating) {
                 let min_required_rating = u_rate + state.assets.spin_rules.game_rating_offset;
                 if o_rate >= min_required_rating {
+                    games_eligible += 1;
                     if db::claim_game(&conn, &username, &game.id).unwrap_or(false) {
                         let _ = db::add_spins(&conn, &username, 1);
                         games_claimed += 1;
@@ -399,9 +406,12 @@ pub async fn claim_sync(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Puzzles fetch failed: {}", e) }))).into_response(),
     };
 
+    let new_puzzles: Vec<_> = puzzles.into_iter().filter(|p| p.date > last_synced_at).collect();
+
+    let mut puzzles_eligible = 0;
     let (spins_earned_from_puzzles, total_eligible) = {
         let conn = state.db.lock().unwrap();
-        let mut puzzles_chronological = puzzles.clone();
+        let mut puzzles_chronological = new_puzzles.clone();
         puzzles_chronological.sort_by_key(|p| p.date);
 
         let mut wins = 0;
@@ -422,6 +432,7 @@ pub async fn claim_sync(
             let min_required_rating = before_play_rating + state.assets.spin_rules.puzzle_rating_offset;
             
             if p.win && p.puzzle.rating >= min_required_rating {
+                puzzles_eligible += 1;
                 let claimed = conn.query_row(
                     "SELECT COUNT(*) FROM claimed_puzzles WHERE username = ?1 AND puzzle_id = ?2",
                     params![username, p.puzzle.id],
@@ -456,6 +467,11 @@ pub async fn claim_sync(
         (spins, total)
     };
 
+    {
+        let conn = state.db.lock().unwrap();
+        let _ = db::update_last_synced_at(&conn, &username, sync_start_time);
+    }
+
     let updated_user = {
         let conn = state.db.lock().unwrap();
         db::get_user(&conn, &username).unwrap().unwrap()
@@ -467,11 +483,14 @@ pub async fn claim_sync(
         "games_sync_spins": games_claimed,
         "puzzles_sync_spins": spins_earned_from_puzzles,
         "daily_spin_claimed": false,
-        "puzzles_processed": puzzles.len(),
+        "puzzles_processed": new_puzzles.len(),
         "eligible_unclaimed_puzzles": total_eligible % divisor,
         "puzzles_per_spin": divisor,
         "spins_available": updated_user.spins_available,
-        "coins": updated_user.coins
+        "coins": updated_user.coins,
+        "games_eligible": games_eligible,
+        "puzzles_eligible": puzzles_eligible,
+        "last_synced_at": sync_start_time
     })).into_response()
 }
 

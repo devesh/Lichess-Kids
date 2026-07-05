@@ -10,6 +10,7 @@ pub struct UserProfile {
     pub current_game_rating: i32,
     pub current_puzzle_rating: i32,
     pub last_daily_spin_claim: String,
+    pub last_synced_at: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -36,7 +37,8 @@ pub fn init_db(db_path: &str) -> Result<Connection> {
             coins INTEGER NOT NULL DEFAULT 0,
             spins_available INTEGER NOT NULL DEFAULT 0,
             current_game_rating INTEGER NOT NULL DEFAULT 1500,
-            current_puzzle_rating INTEGER NOT NULL DEFAULT 1500
+            current_puzzle_rating INTEGER NOT NULL DEFAULT 1500,
+            last_synced_at INTEGER NOT NULL DEFAULT 0
         );",
         [],
     )?;
@@ -103,6 +105,9 @@ pub fn init_db(db_path: &str) -> Result<Connection> {
     // Migration: Add last_daily_spin_claim column to users if it doesn't exist
     let _ = conn.execute("ALTER TABLE users ADD COLUMN last_daily_spin_claim TEXT DEFAULT '';", []);
 
+    // Migration: Add last_synced_at column to users if it doesn't exist
+    let _ = conn.execute("ALTER TABLE users ADD COLUMN last_synced_at INTEGER DEFAULT 0;", []);
+
     Ok(conn)
 }
 
@@ -122,7 +127,7 @@ pub fn create_user(conn: &Connection, username: &str, avatar_base: &str) -> Resu
 
 pub fn get_user(conn: &Connection, username: &str) -> Result<Option<UserProfile>> {
     let mut stmt = conn.prepare(
-        "SELECT username, avatar_base, coins, spins_available, current_game_rating, current_puzzle_rating, last_daily_spin_claim 
+        "SELECT username, avatar_base, coins, spins_available, current_game_rating, current_puzzle_rating, last_daily_spin_claim, last_synced_at 
          FROM users WHERE username = ?1"
     )?;
 
@@ -136,6 +141,7 @@ pub fn get_user(conn: &Connection, username: &str) -> Result<Option<UserProfile>
             current_game_rating: row.get(4)?,
             current_puzzle_rating: row.get(5)?,
             last_daily_spin_claim: row.get(6).unwrap_or_default(),
+            last_synced_at: row.get(7).unwrap_or(0),
         }))
     } else {
         Ok(None)
@@ -323,6 +329,14 @@ pub fn delete_friend(conn: &Connection, username: &str, friend_username: &str) -
         params![username, friend_username],
     )?;
     Ok(rows_affected > 0)
+}
+
+pub fn update_last_synced_at(conn: &Connection, username: &str, last_synced_at: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE users SET last_synced_at = ?2 WHERE username = ?1",
+        params![username, last_synced_at],
+    )?;
+    Ok(())
 }
 
 

@@ -86,10 +86,13 @@
                 <p style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.5; margin-bottom: 15px;">
                     Fetch your latest Lichess games and puzzles!
                 </p>
+                <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px; font-weight: 500;">
+                    Last Synced: <span id="last-sync-timestamp" style="font-weight: 700; color: var(--text-primary);">Never</span>
+                </div>
                 <div style="font-size: 0.85rem; color: var(--text-secondary); background: rgba(0,0,0,0.2); padding: 10px; border-radius: 10px; margin-bottom: 15px; border: 1px solid var(--border-color);">
                     <ul style="padding-left: 15px;">
-                        <li>1 spin for beating opponent rated &ge; your ELO</li>
-                        <li>1 spin for every 25 correct puzzles rated &ge; your ELO</li>
+                        <li>1 spin for beating opponent rated &ge; (your ELO - 100)</li>
+                        <li>1 spin for every 25 correct puzzles rated &ge; (your puzzle rating - 100)</li>
                     </ul>
                 </div>
                 <button id="sync-btn" class="btn btn-primary" style="width: 100%;">
@@ -322,6 +325,17 @@
                 // Update ratings
                 document.getElementById('game-rating').innerText = userProfile.current_game_rating;
                 document.getElementById('puzzle-rating').innerText = userProfile.current_puzzle_rating;
+
+                // Update Last Synced timestamp
+                const lastSyncEl = document.getElementById('last-sync-timestamp');
+                if (lastSyncEl) {
+                    if (userProfile.last_synced_at > 0) {
+                        const d = new Date(userProfile.last_synced_at);
+                        lastSyncEl.innerText = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                    } else {
+                        lastSyncEl.innerText = "Never";
+                    }
+                }
 
                 // Disable spin button if no spins
                 spinBtn.disabled = userProfile.spins_available <= 0;
@@ -617,25 +631,11 @@
                 
                 if (data.success) {
                     let totalSpins = data.games_sync_spins + data.puzzles_sync_spins;
-                    let msgParts = [];
-                    if (data.games_sync_spins > 0) msgParts.push(`${data.games_sync_spins} games`);
-                    if (data.puzzles_sync_spins > 0) msgParts.push(`${data.puzzles_sync_spins} puzzles`);
                     
-                    if (data.daily_spin_claimed) {
-                        totalSpins += 1;
-                        msgParts.push(`1 daily check-in bonus`);
-                    }
-
-                    if (totalSpins > 0) {
-                        syncStatus.style.color = 'var(--success)';
-                        syncStatus.innerText = `Sync Complete! Earned ${totalSpins} spins! (${msgParts.join(', ')})`;
-                    } else {
-                        const puzzleGoal = data.puzzles_per_spin || 25;
-                        syncStatus.style.color = 'var(--text-secondary)';
-                        syncStatus.innerText = `Synced! No new spins earned this time. Remainder puzzles: ${data.eligible_unclaimed_puzzles}/${puzzleGoal}`;
-                    }
+                    syncStatus.style.color = 'var(--success)';
+                    syncStatus.innerText = `Sync Complete! Earned ${totalSpins} spins. Found ${data.games_eligible} games won & ${data.puzzles_eligible} puzzles solved meeting criteria.`;
                     
-                    // Reload profile to update spins balance
+                    // Reload profile to update spins balance and sync timestamp
                     loadProfile();
                 } else {
                     syncStatus.style.color = 'var(--error)';

@@ -161,3 +161,16 @@ fn test_spin_rules_and_daily_spin() {
     assert_eq!(u2.last_daily_spin_claim, "2026-07-05");
 }
 
+#[test]
+fn test_last_synced_at() {
+    let conn = setup_in_memory_db();
+    db::create_user(&conn, "gabriel", "cat").unwrap();
+
+    let u = db::get_user(&conn, "gabriel").unwrap().unwrap();
+    assert_eq!(u.last_synced_at, 0);
+
+    db::update_last_synced_at(&conn, "gabriel", 123456789).unwrap();
+    let u2 = db::get_user(&conn, "gabriel").unwrap().unwrap();
+    assert_eq!(u2.last_synced_at, 123456789);
+}
+
