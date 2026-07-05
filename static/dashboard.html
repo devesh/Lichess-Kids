@@ -75,8 +75,8 @@
         <!-- LEFT PANEL: PROFILE, AVATAR PREVIEW, AND SYNC -->
         <div style="display: flex; flex-direction: column; gap: 25px;">
             <!-- Profile / Avatar Section -->
-            <div id="profile-card" class="glass-panel clickable-card" style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
-                <div id="avatar-container" class="avatar-preview"></div>
+            <div id="profile-card" class="glass-panel" style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
+                <div id="avatar-container" class="avatar-preview clickable-card"></div>
                 <div style="text-align: center;">
                     <h2 id="profile-name" style="margin-bottom: 2px;">Player</h2>
                     <p style="color: var(--text-secondary); font-size: 0.9rem;">
@@ -374,10 +374,10 @@
                 // Update Equipped Clothes display
                 updateEquippedList();
 
-                // Make profile card clickable to go to public profile page
-                const profileCard = document.getElementById('profile-card');
-                if (profileCard) {
-                    profileCard.onclick = () => {
+                // Make avatar container clickable to go to public profile page
+                const avatarContainerEl = document.getElementById('avatar-container');
+                if (avatarContainerEl) {
+                    avatarContainerEl.onclick = () => {
                         window.location.href = `/user/${userProfile.username}`;
                     };
                 }
