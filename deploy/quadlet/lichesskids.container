@@ -1,0 +1,14 @@
+[Unit]
+Description=Lichess Kids Web Service
+After=network-online.target
+
+[Container]
+Image=localhost/lichesskids:latest
+PublishPort=3000:3000
+Volume=lichesskids-db.volume:/data:Z
+Environment=PORT=3000
+Environment=DATABASE_URL=/data/lichesskids.db
+
+[Install]
+# Active under user session default target for rootless deployment
+WantedBy=default.target

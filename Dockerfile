@@ -36,8 +36,9 @@ COPY --from=builder /usr/src/lichesskids/target/release/lichesskids /usr/local/b
 COPY static ./static
 
 # Set runtime environment defaults
+RUN mkdir -p /data
 ENV PORT=3000
-ENV DATABASE_URL=/app/lichesskids.db
+ENV DATABASE_URL=/data/lichesskids.db
 
 EXPOSE 3000
 
