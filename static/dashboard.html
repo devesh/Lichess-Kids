@@ -89,6 +89,21 @@
                 </button>
                 <div id="sync-status" style="margin-top: 12px; font-size: 0.9rem; font-weight: 600; text-align: center; color: var(--success);"></div>
             </div>
+
+            <!-- Share & Discover Panel -->
+            <div class="glass-panel">
+                <h2>Share & Discover Profile</h2>
+                <p style="color: var(--text-secondary); font-size: 0.85rem; line-height: 1.5; margin-bottom: 12px;">
+                    Lichess API is secure and read-only, so the link to your Lichess Kids profile must be added to your Lichess profile manually:
+                </p>
+                <div style="font-size: 0.85rem; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; border: 1px solid var(--border-color); word-break: break-all; margin-bottom: 12px;">
+                    <span style="color: var(--text-secondary); font-size: 0.8rem;">Your profile URL (Click to copy):</span><br>
+                    <strong id="copy-profile-link" style="color: var(--primary-color); cursor: pointer; display: block; margin-top: 4px; text-decoration: underline;" title="Click to copy">Loading...</strong>
+                </div>
+                <p style="color: var(--text-secondary); font-size: 0.8rem; line-height: 1.4;">
+                    Paste this URL under the <strong>Links</strong> section of your Lichess profile settings on <a href="https://lichess.org/account/profile" target="_blank" style="color: var(--primary-color); text-decoration: underline;">lichess.org/account/profile</a>. This lets other instances automatically discover you!
+                </p>
+            </div>
         </div>
 
         <!-- RIGHT PANEL: SPIN WHEEL, SHOP, FRIENDS -->
@@ -333,6 +348,24 @@
 
                 // Update Equipped Clothes display
                 updateEquippedList();
+
+                // Update profile link sharing helper
+                const profileLink = window.location.origin + "/profile/" + userProfile.username;
+                const linkEl = document.getElementById('copy-profile-link');
+                if (linkEl) {
+                    linkEl.innerText = profileLink;
+                    linkEl.onclick = () => {
+                        navigator.clipboard.writeText(profileLink).then(() => {
+                            const originalText = linkEl.innerText;
+                            linkEl.innerText = "Copied!";
+                            linkEl.style.color = "var(--success)";
+                            setTimeout(() => {
+                                linkEl.innerText = originalText;
+                                linkEl.style.color = "var(--primary-color)";
+                            }, 1500);
+                        });
+                    };
+                }
 
                 // Load shop catalog
                 loadShop();
