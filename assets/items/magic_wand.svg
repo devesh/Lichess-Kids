@@ -1,0 +1,7 @@
+<svg viewBox="0 0 200 200" width="100%" height="100%">
+            <!-- Wooden shaft -->
+            <line x1="135" y1="170" x2="175" y2="120" stroke="#85583f" stroke-width="4" stroke-linecap="round" />
+            <!-- Glowing Star -->
+            <polygon points="175,120 178,112 186,110 180,104 182,96 175,100 168,96 170,104 164,110 172,112" fill="#ffd23f" stroke="#f59f00" stroke-width="1.5" />
+            <circle cx="175" cy="120" r="15" fill="rgba(255, 210, 63, 0.3)" opacity="0.6" />
+        </svg>

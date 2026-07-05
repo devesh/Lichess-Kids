@@ -1,0 +1,34 @@
+# Lichess Kids Traefik Dynamic Configuration Template
+# Save in Traefik's dynamic provider directory (e.g. /etc/traefik/dynamic/)
+
+http:
+  routers:
+    # HTTP Router - Redirects traffic to HTTPS
+    lichesskids-http:
+      rule: "Host(`lichesskids.example.com`)"
+      entryPoints:
+        - web
+      middlewares:
+        - redirect-to-https
+      service: lichesskids-service
+
+    # HTTPS Secure Router
+    lichesskids-secure:
+      rule: "Host(`lichesskids.example.com`)"
+      entryPoints:
+        - websecure
+      service: lichesskids-service
+      tls:
+        certResolver: myresolver # Replace with your configured ACME resolver ID
+
+  middlewares:
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+  services:
+    lichesskids-service:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:64355"

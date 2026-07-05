@@ -78,7 +78,7 @@ fn test_spins_claim() {
 #[test]
 fn test_shop_and_equip() {
     let conn = setup_in_memory_db();
-    db::create_user(&conn, "david", "kid_boy").unwrap();
+    db::create_user(&conn, "david", "cat").unwrap();
 
     // Try to buy hoodie with 0 coins - should fail
     let buy_res = db::buy_item(&conn, "david", "hoodie", 15).unwrap();
@@ -114,7 +114,7 @@ fn test_shop_and_equip() {
 #[test]
 fn test_friends() {
     let conn = setup_in_memory_db();
-    db::create_user(&conn, "emma", "kid_girl").unwrap();
+    db::create_user(&conn, "emma", "dog").unwrap();
 
     // Add friend
     let added = db::add_friend(&conn, "emma", "frank").unwrap();
@@ -136,3 +136,51 @@ fn test_friends() {
     let friends = db::get_friends(&conn, "emma").unwrap();
     assert_eq!(friends.len(), 0);
 }
+
+#[test]
+fn test_known_instances() {
+    let conn = setup_in_memory_db();
+
+    // Check empty initially
+    let instances = db::get_known_instances(&conn).unwrap();
+    assert_eq!(instances.len(), 0);
+
+    // Insert instance
+    db::insert_known_instance(&conn, "lichesskids.org", "lichesskids", "0.1.0").unwrap();
+
+    // Retrieve and assert details
+    let instances = db::get_known_instances(&conn).unwrap();
+    assert_eq!(instances.len(), 1);
+    assert_eq!(instances[0].domain, "lichesskids.org");
+    assert_eq!(instances[0].software, "lichesskids");
+    assert_eq!(instances[0].version, "0.1.0");
+
+    // Update instance details
+    db::insert_known_instance(&conn, "lichesskids.org", "lichesskids", "0.2.0").unwrap();
+    let instances = db::get_known_instances(&conn).unwrap();
+    assert_eq!(instances.len(), 1);
+    assert_eq!(instances[0].version, "0.2.0");
+}
+
+#[test]
+fn test_asset_catalog() {
+    let assets = lichesskids::assets::AssetCatalog::load_from_dir("assets").unwrap();
+    assert!(!assets.bases.is_empty());
+    assert!(!assets.items.is_empty());
+    assert!(assets.bases_map.contains_key("cat"));
+    assert!(assets.items_map.contains_key("party_hat"));
+}
+
+#[test]
+fn test_spin_rules_and_daily_spin() {
+    let conn = setup_in_memory_db();
+    db::create_user(&conn, "gabriel", "cat").unwrap();
+
+    let u = db::get_user(&conn, "gabriel").unwrap().unwrap();
+    assert_eq!(u.last_daily_spin_claim, "");
+
+    db::update_last_daily_spin_claim(&conn, "gabriel", "2026-07-05").unwrap();
+    let u2 = db::get_user(&conn, "gabriel").unwrap().unwrap();
+    assert_eq!(u2.last_daily_spin_claim, "2026-07-05");
+}
+

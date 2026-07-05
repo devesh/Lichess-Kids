@@ -13,7 +13,7 @@ use lichesskids::routes::{
     add_friend, buy_item, claim_sync, delete_friend, equip_item, get_friends, get_profile,
     get_shop, logout, mock_login, oauth_callback, oauth_start, select_avatar, spin_wheel,
     get_well_known_nodeinfo, get_nodeinfo_2_0, get_user_profile_html, get_avatar_svg,
-    AppState,
+    get_network_instances, get_assets_catalog, AppState,
 };
 
 #[tokio::main]
@@ -26,12 +26,16 @@ async fn main() {
 
     // 2. Fetch configurations
     let lichess_client_id = env::var("LICHESS_CLIENT_ID").unwrap_or_else(|_| "lichesskids".to_string());
-    let redirect_uri = env::var("REDIRECT_URI").unwrap_or_else(|_| "http://localhost:3000/api/oauth/callback".to_string());
+
+    println!("Loading assets from directory...");
+    let assets = lichesskids::assets::AssetCatalog::load_from_dir("assets")
+        .expect("Failed to load assets from directory");
+    let assets_shared = Arc::new(assets);
 
     let state = AppState {
         db: db_shared,
         lichess_client_id,
-        redirect_uri,
+        assets: assets_shared,
     };
 
     // 3. Create Router
@@ -57,6 +61,8 @@ async fn main() {
         .route("/api/friends", get(get_friends))
         .route("/api/friends/add", post(add_friend))
         .route("/api/friends/delete", post(delete_friend))
+        .route("/api/network/instances", get(get_network_instances))
+        .route("/api/assets/catalog", get(get_assets_catalog))
         // Serve static assets
         .nest_service("/static", ServeDir::new("static"))
         .fallback_service(ServeDir::new("static"))
@@ -64,7 +70,7 @@ async fn main() {
         .layer(CorsLayer::permissive());
 
     // 4. Run Server
-    let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let port = env::var("PORT").unwrap_or_else(|_| "64355".to_string());
     let addr_str = format!("0.0.0.0:{}", port);
     let addr: SocketAddr = addr_str.parse().expect("Invalid bind address");
 

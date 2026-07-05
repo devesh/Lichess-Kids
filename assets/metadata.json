@@ -1,0 +1,137 @@
+{
+  "bases": [
+    {
+      "id": "cat",
+      "name": "Cute Cat"
+    },
+    {
+      "id": "dog",
+      "name": "Playful Dog"
+    },
+    {
+      "id": "panda",
+      "name": "Chubby Panda"
+    },
+    {
+      "id": "fox",
+      "name": "Clever Fox"
+    },
+    {
+      "id": "alien",
+      "name": "Space Alien"
+    },
+    {
+      "id": "robot",
+      "name": "Cyber Robot"
+    }
+  ],
+  "items": [
+    {
+      "id": "party_hat",
+      "name": "Party Hat",
+      "category": "hat",
+      "price": 10
+    },
+    {
+      "id": "crown",
+      "name": "Royal Crown",
+      "category": "hat",
+      "price": 25
+    },
+    {
+      "id": "cowboy_hat",
+      "name": "Cowboy Hat",
+      "category": "hat",
+      "price": 15
+    },
+    {
+      "id": "pirate_hat",
+      "name": "Pirate Hat",
+      "category": "hat",
+      "price": 20
+    },
+    {
+      "id": "superhero_cape",
+      "name": "Superhero Cape",
+      "category": "top",
+      "price": 30
+    },
+    {
+      "id": "hoodie",
+      "name": "Comfy Hoodie",
+      "category": "top",
+      "price": 15
+    },
+    {
+      "id": "royal_robe",
+      "name": "Royal Robe",
+      "category": "top",
+      "price": 35
+    },
+    {
+      "id": "denim_shorts",
+      "name": "Denim Shorts",
+      "category": "bottom",
+      "price": 12
+    },
+    {
+      "id": "grass_skirt",
+      "name": "Grass Skirt",
+      "category": "bottom",
+      "price": 18
+    },
+    {
+      "id": "mohawk",
+      "name": "Pink Mohawk",
+      "category": "hair",
+      "price": 8
+    },
+    {
+      "id": "rainbow_hair",
+      "name": "Rainbow Hair",
+      "category": "hair",
+      "price": 22
+    },
+    {
+      "id": "magic_wand",
+      "name": "Magic Wand",
+      "category": "accessory",
+      "price": 25
+    },
+    {
+      "id": "sword",
+      "name": "Toy Sword",
+      "category": "accessory",
+      "price": 20
+    },
+    {
+      "id": "balloon",
+      "name": "Red Balloon",
+      "category": "accessory",
+      "price": 8
+    },
+    {
+      "id": "space",
+      "name": "Space Galaxy",
+      "category": "background",
+      "price": 40
+    },
+    {
+      "id": "forest",
+      "name": "Magical Forest",
+      "category": "background",
+      "price": 30
+    },
+    {
+      "id": "castle",
+      "name": "Candy Castle",
+      "category": "background",
+      "price": 35
+    }
+  ],
+  "spin_rules": {
+    "game_rating_offset": -100,
+    "puzzle_rating_offset": -100,
+    "puzzles_per_spin": 25
+  }
+}

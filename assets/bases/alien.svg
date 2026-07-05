@@ -1,0 +1,20 @@
+<svg viewBox="0 0 200 200" width="100%" height="100%">
+            <!-- Body -->
+            <path d="M 60 180 C 60 145, 140 145, 140 180 Z" fill="#69db7c" stroke="#2b8a3e" stroke-width="3" />
+            <!-- Antennae -->
+            <line x1="80" y1="58" x2="65" y2="35" stroke="#2b8a3e" stroke-width="4" />
+            <circle cx="65" cy="35" r="8" fill="#ffd23f" stroke="#2b8a3e" stroke-width="2" />
+            <line x1="120" y1="58" x2="135" y2="35" stroke="#2b8a3e" stroke-width="4" />
+            <circle cx="135" cy="35" r="8" fill="#ffd23f" stroke="#2b8a3e" stroke-width="2" />
+            <!-- Head -->
+            <ellipse cx="100" cy="105" rx="55" ry="45" fill="#69db7c" stroke="#2b8a3e" stroke-width="3" />
+            <!-- Three Eyes -->
+            <circle cx="75" cy="98" r="8" fill="#fff" stroke="#2b8a3e" stroke-width="1.5" />
+            <circle cx="75" cy="98" r="4" fill="#364fc7" />
+            <circle cx="100" cy="90" r="10" fill="#fff" stroke="#2b8a3e" stroke-width="1.5" />
+            <circle cx="100" cy="90" r="5" fill="#364fc7" />
+            <circle cx="125" cy="98" r="8" fill="#fff" stroke="#2b8a3e" stroke-width="1.5" />
+            <circle cx="125" cy="98" r="4" fill="#364fc7" />
+            <!-- Mouth -->
+            <path d="M 85 125 Q 100 138 115 125" fill="none" stroke="#2b8a3e" stroke-width="4" stroke-linecap="round" />
+        </svg>

@@ -17,7 +17,7 @@ use crate::lichess;
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub lichess_client_id: String,
-    pub redirect_uri: String,
+    pub assets: Arc<crate::assets::AssetCatalog>,
 }
 
 // Helper to extract username from cookies
@@ -122,7 +122,7 @@ pub async fn mock_login(
         Ok(None) => {
             // New user, needs avatar selection
             if let Some(avatar) = payload.avatar_base {
-                if !vec!["kid_boy", "kid_girl", "cat", "dog", "alien"].contains(&avatar.as_str()) {
+                if !state.assets.bases_map.contains_key(&avatar) {
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(serde_json::json!({ "error": "Invalid avatar base" })),
@@ -181,7 +181,18 @@ pub struct OAuthCallbackQuery {
     pub state: String,
 }
 
-pub async fn oauth_start(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn oauth_start(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let host = headers.get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("localhost:64355");
+    let proto = headers.get("x-forwarded-proto")
+        .and_then(|p| p.to_str().ok())
+        .unwrap_or("http");
+    let redirect_uri = format!("{}://{}/api/oauth/callback", proto, host);
+
     let mut rng = rand::thread_rng();
     
     // Generate state and code verifier
@@ -220,7 +231,7 @@ pub async fn oauth_start(State(state): State<AppState>) -> impl IntoResponse {
     let auth_url = format!(
         "https://lichess.org/oauth?response_type=code&client_id={}&redirect_uri={}&scope=puzzle:read&state={}&code_challenge={}&code_challenge_method=S256",
         state.lichess_client_id,
-        urlencoding::encode(&state.redirect_uri),
+        urlencoding::encode(&redirect_uri),
         state_val,
         code_challenge
     );
@@ -231,8 +242,16 @@ pub async fn oauth_start(State(state): State<AppState>) -> impl IntoResponse {
 #[axum::debug_handler]
 pub async fn oauth_callback(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<OAuthCallbackQuery>,
 ) -> Response {
+    let host = headers.get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("localhost:64355");
+    let proto = headers.get("x-forwarded-proto")
+        .and_then(|p| p.to_str().ok())
+        .unwrap_or("http");
+    let redirect_uri = format!("{}://{}/api/oauth/callback", proto, host);
     // Retrieve verifier inside a block so we release the DB lock before the network call
     let code_verifier: String = {
         let conn = state.db.lock().unwrap();
@@ -256,7 +275,7 @@ pub async fn oauth_callback(
     let params = [
         ("grant_type", "authorization_code"),
         ("code", &query.code),
-        ("redirect_uri", &state.redirect_uri),
+        ("redirect_uri", &redirect_uri),
         ("client_id", &state.lichess_client_id),
         ("code_verifier", &code_verifier),
     ];
@@ -314,7 +333,7 @@ pub async fn oauth_callback(
         } else {
             // Create user placeholder, ratings will be set on avatar select
             let _ = conn.execute(
-                "INSERT OR IGNORE INTO users (username, avatar_base, current_game_rating, current_puzzle_rating) VALUES (?1, 'kid_boy', ?2, ?3)",
+                "INSERT OR IGNORE INTO users (username, avatar_base, current_game_rating, current_puzzle_rating) VALUES (?1, 'cat', ?2, ?3)",
                 params![username, game_rating, puzzle_rating],
             );
             let _ = conn.execute("INSERT OR IGNORE INTO equipped (username) VALUES (?1)", params![username]);
@@ -347,7 +366,7 @@ pub async fn select_avatar(
         None => return (StatusCode::UNAUTHORIZED, "Not logged in").into_response(),
     };
 
-    if !vec!["kid_boy", "kid_girl", "cat", "dog", "alien"].contains(&payload.avatar_base.as_str()) {
+    if !state.assets.bases_map.contains_key(&payload.avatar_base) {
         return (StatusCode::BAD_REQUEST, "Invalid avatar base").into_response();
     }
 
@@ -416,12 +435,10 @@ pub async fn claim_sync(
     {
         let conn = state.db.lock().unwrap();
         for game in games {
-            // Is it rated?
             if !game.rated {
                 continue;
             }
 
-            // Did the user win?
             let user_won = match game.winner.as_deref() {
                 Some("white") => game.players.white.user.as_ref().map(|u| u.id == username.to_lowercase()).unwrap_or(false),
                 Some("black") => game.players.black.user.as_ref().map(|u| u.id == username.to_lowercase()).unwrap_or(false),
@@ -432,7 +449,6 @@ pub async fn claim_sync(
                 continue;
             }
 
-            // Check ratings at game time
             let (user_game_rating, opp_game_rating) = if game.players.white.user.as_ref().map(|u| u.id == username.to_lowercase()).unwrap_or(false) {
                 (game.players.white.rating, game.players.black.rating)
             } else {
@@ -440,9 +456,8 @@ pub async fn claim_sync(
             };
 
             if let (Some(u_rate), Some(o_rate)) = (user_game_rating, opp_game_rating) {
-                // "beat opponent with rating >= your rating at the time"
-                if o_rate >= u_rate {
-                    // Try claiming
+                let min_required_rating = u_rate + state.assets.spin_rules.game_rating_offset;
+                if o_rate >= min_required_rating {
                     if db::claim_game(&conn, &username, &game.id).unwrap_or(false) {
                         let _ = db::add_spins(&conn, &username, 1);
                         games_claimed += 1;
@@ -452,23 +467,17 @@ pub async fn claim_sync(
         }
     }
 
-    // 3. Fetch and evaluate puzzles
-    // A spin for every 25 puzzles solved correctly with puzzle rating >= user's rating at time of play
     let token_str = token.unwrap_or_else(|| "mock_token".to_string());
     let puzzles = match lichess::fetch_puzzle_activity(&token_str, 50).await {
         Ok(p) => p,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Puzzles fetch failed: {}", e) }))).into_response(),
     };
 
-    // Reconstruct rating progression and process claims inside a block to drop the lock before returning
     let (spins_earned_from_puzzles, total_eligible) = {
         let conn = state.db.lock().unwrap();
-        // Sort chronologically (oldest first) to track rating progress correctly
         let mut puzzles_chronological = puzzles.clone();
         puzzles_chronological.sort_by_key(|p| p.date);
 
-        // Reconstruct rating progression walking forward
-        // Since we know the ending puzzle_rating, let's work out the starting rating
         let mut wins = 0;
         let mut losses = 0;
         for p in &puzzles_chronological {
@@ -484,10 +493,9 @@ pub async fn claim_sync(
 
         for p in puzzles_chronological {
             let before_play_rating = sim_rating;
+            let min_required_rating = before_play_rating + state.assets.spin_rules.puzzle_rating_offset;
             
-            // Correct and rating >= rating before play
-            if p.win && p.puzzle.rating >= before_play_rating {
-                // Check if already claimed
+            if p.win && p.puzzle.rating >= min_required_rating {
                 let claimed = conn.query_row(
                     "SELECT COUNT(*) FROM claimed_puzzles WHERE username = ?1 AND puzzle_id = ?2",
                     params![username, p.puzzle.id],
@@ -499,7 +507,6 @@ pub async fn claim_sync(
                 }
             }
 
-            // Adjust rating based on result
             if p.win {
                 sim_rating += 10;
             } else {
@@ -507,15 +514,14 @@ pub async fn claim_sync(
             }
         }
 
-        // Award 1 spin for every group of 25 eligible puzzles
+        let divisor = std::cmp::max(1, state.assets.spin_rules.puzzles_per_spin as usize);
         let total = eligible_puzzle_ids.len();
-        let num_spins = total / 25;
+        let num_spins = total / divisor;
         let mut spins = 0;
 
         for i in 0..num_spins {
-            // Claim 25 puzzles
-            for j in 0..25 {
-                let p_id = &eligible_puzzle_ids[i * 25 + j];
+            for j in 0..divisor {
+                let p_id = &eligible_puzzle_ids[i * divisor + j];
                 let _ = db::claim_puzzle(&conn, &username, p_id);
             }
             let _ = db::add_spins(&conn, &username, 1);
@@ -529,12 +535,15 @@ pub async fn claim_sync(
         db::get_user(&conn, &username).unwrap().unwrap()
     };
 
+    let divisor = std::cmp::max(1, state.assets.spin_rules.puzzles_per_spin as usize);
     Json(serde_json::json!({
         "success": true,
         "games_sync_spins": games_claimed,
         "puzzles_sync_spins": spins_earned_from_puzzles,
+        "daily_spin_claimed": false,
         "puzzles_processed": puzzles.len(),
-        "eligible_unclaimed_puzzles": total_eligible % 25, // remainder towards next spin
+        "eligible_unclaimed_puzzles": total_eligible % divisor,
+        "puzzles_per_spin": divisor,
         "spins_available": updated_user.spins_available,
         "coins": updated_user.coins
     })).into_response()
@@ -642,17 +651,17 @@ pub async fn get_shop(
     let owned_items = db::get_inventory(&conn, &username)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))))?;
 
-    let shop_items = routes_shop_items();
-    let response: Vec<ShopResponseItem> = shop_items
-        .into_iter()
+    let response: Vec<ShopResponseItem> = state.assets.items
+        .iter()
         .map(|item| {
-            let owned = owned_items.contains(&item.id.to_string());
+            let owned = owned_items.contains(&item.id);
+            let asset_url = format!("/static/assets/{}.png", item.id);
             ShopResponseItem {
-                id: item.id.to_string(),
-                name: item.name.to_string(),
-                category: item.category.to_string(),
+                id: item.id.clone(),
+                name: item.name.clone(),
+                category: item.category.clone(),
                 price: item.price,
-                asset_url: item.asset_url.to_string(),
+                asset_url,
                 owned,
             }
         })
@@ -676,9 +685,8 @@ pub async fn buy_item(
         None => return Err((StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Not logged in" })))),
     };
 
-    // Find the item in our shop catalog
-    let shop_items = routes_shop_items();
-    let item = match shop_items.iter().find(|i| i.id == payload.item_id) {
+    // Find the item in our dynamic assets catalog
+    let item = match state.assets.items.iter().find(|i| i.id == payload.item_id) {
         Some(i) => i,
         None => return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Item not found in catalog" })))),
     };
@@ -730,9 +738,10 @@ pub struct FriendProfile {
     pub current_puzzle_rating: i32,
     pub equipped: EquippedItems,
     pub lichess_url: String,
+    pub avatar_svg_url: Option<String>,
 }
 
-async fn try_discover_remote_profile(f_name: &str) -> Option<FriendProfile> {
+async fn try_discover_remote_profile(f_name: &str, db: Arc<Mutex<Connection>>) -> Option<FriendProfile> {
     // 1. Fetch public profile from Lichess
     let pub_prof = lichess::fetch_public_profile(f_name).await.ok()?;
     let links = pub_prof.profile.as_ref()?.links.as_ref()?;
@@ -773,15 +782,44 @@ async fn try_discover_remote_profile(f_name: &str) -> Option<FriendProfile> {
                                     #[derive(Deserialize)]
                                     struct Software {
                                         name: String,
+                                        version: String,
+                                    }
+                                    #[derive(Deserialize)]
+                                    struct NodeInfoMetadata {
+                                        peers: Option<Vec<String>>,
                                     }
                                     #[derive(Deserialize)]
                                     struct NodeInfo2 {
                                         software: Software,
+                                        metadata: Option<NodeInfoMetadata>,
                                     }
                                     if let Ok(res2) = client.get(&href).send().await {
                                         if let Ok(node2) = res2.json::<NodeInfo2>().await {
                                             if node2.software.name == "lichesskids" {
                                                 remote_url = Some(url_str.to_string());
+                                                
+                                                // Cache this instance in DB
+                                                let conn = db.lock().unwrap();
+                                                let _ = db::insert_known_instance(
+                                                    &conn,
+                                                    domain,
+                                                    &node2.software.name,
+                                                    &node2.software.version,
+                                                );
+
+                                                // Cache peers for discovery (gossip)
+                                                if let Some(metadata) = node2.metadata {
+                                                    if let Some(peers) = metadata.peers {
+                                                        for peer in peers {
+                                                            let _ = db::insert_known_instance(
+                                                                &conn,
+                                                                &peer,
+                                                                "lichesskids",
+                                                                "unknown",
+                                                            );
+                                                        }
+                                                    }
+                                                }
                                                 break;
                                             }
                                         }
@@ -819,6 +857,7 @@ async fn try_discover_remote_profile(f_name: &str) -> Option<FriendProfile> {
     #[derive(Deserialize)]
     struct PersonSchema {
         description: Option<String>,
+        image: Option<String>,
     }
     #[derive(Deserialize)]
     struct ProfilePageSchema {
@@ -828,8 +867,9 @@ async fn try_discover_remote_profile(f_name: &str) -> Option<FriendProfile> {
 
     let schema: ProfilePageSchema = serde_json::from_str(json_str).ok()?;
     let desc = schema.main_entity.description?;
+    let avatar_svg_url = schema.main_entity.image;
 
-    let mut avatar_base = "kid_boy".to_string();
+    let mut avatar_base = "cat".to_string();
     let mut equipped = EquippedItems::default();
 
     for part in desc.split(';') {
@@ -862,6 +902,7 @@ async fn try_discover_remote_profile(f_name: &str) -> Option<FriendProfile> {
         current_puzzle_rating: p_rate,
         equipped,
         lichess_url: format!("https://lichess.org/@/{}", f_name),
+        avatar_svg_url,
     })
 }
 
@@ -911,13 +952,15 @@ pub async fn get_friends(
                 current_puzzle_rating: user.current_puzzle_rating,
                 equipped,
                 lichess_url: format!("https://lichess.org/@/{}", f_name),
+                avatar_svg_url: None,
             });
         } else {
             // Check remote profile page discovery
             let f_name_clone = f_name.clone();
+            let db_clone = state.db.clone();
             futures.push(tokio::spawn(async move {
                 // If it fails or is remote, try to discover it
-                try_discover_remote_profile(&f_name_clone).await
+                try_discover_remote_profile(&f_name_clone, db_clone).await
             }));
         }
     }
@@ -929,6 +972,25 @@ pub async fn get_friends(
     }
 
     Ok(Json(friends_profiles))
+}
+
+pub async fn get_network_instances(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let conn = state.db.lock().unwrap();
+    match db::get_known_instances(&conn) {
+        Ok(instances) => Ok(Json(instances)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )),
+    }
+}
+
+pub async fn get_assets_catalog(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    (StatusCode::OK, Json((*state.assets).clone()))
 }
 
 #[derive(Deserialize)]
@@ -954,55 +1016,26 @@ pub async fn delete_friend(
 }
 
 // -------------------------------------------------------------
-// STATIC SHOP CATALOG DEFINITION
-// -------------------------------------------------------------
-
-pub struct ShopItemCatalog {
-    pub id: &'static str,
-    pub name: &'static str,
-    pub category: &'static str,
-    pub price: i32,
-    pub asset_url: &'static str,
-}
-
-fn routes_shop_items() -> Vec<ShopItemCatalog> {
-    vec![
-        // Tops
-        ShopItemCatalog { id: "superhero_cape", name: "Superhero Cape", category: "top", price: 10, asset_url: "/static/assets/items/superhero_cape.png" },
-        ShopItemCatalog { id: "hoodie", name: "Cool Hoodie", category: "top", price: 15, asset_url: "/static/assets/items/hoodie.png" },
-        ShopItemCatalog { id: "royal_robe", name: "Royal Robe", category: "top", price: 25, asset_url: "/static/assets/items/royal_robe.png" },
-        // Bottoms
-        ShopItemCatalog { id: "denim_shorts", name: "Denim Shorts", category: "bottom", price: 5, asset_url: "/static/assets/items/denim_shorts.png" },
-        ShopItemCatalog { id: "grass_skirt", name: "Grass Skirt", category: "bottom", price: 10, asset_url: "/static/assets/items/grass_skirt.png" },
-        // Hats
-        ShopItemCatalog { id: "party_hat", name: "Party Hat", category: "hat", price: 5, asset_url: "/static/assets/items/party_hat.png" },
-        ShopItemCatalog { id: "crown", name: "Golden Crown", category: "hat", price: 30, asset_url: "/static/assets/items/crown.png" },
-        ShopItemCatalog { id: "cowboy_hat", name: "Cowboy Hat", category: "hat", price: 20, asset_url: "/static/assets/items/cowboy_hat.png" },
-        ShopItemCatalog { id: "pirate_hat", name: "Pirate Hat", category: "hat", price: 18, asset_url: "/static/assets/items/pirate_hat.png" },
-        // Hair
-        ShopItemCatalog { id: "mohawk", name: "Cool Mohawk", category: "hair", price: 12, asset_url: "/static/assets/items/mohawk.png" },
-        ShopItemCatalog { id: "rainbow_hair", name: "Rainbow Hair", category: "hair", price: 15, asset_url: "/static/assets/items/rainbow_hair.png" },
-        // Accessories
-        ShopItemCatalog { id: "magic_wand", name: "Magic Wand", category: "accessory", price: 25, asset_url: "/static/assets/items/magic_wand.png" },
-        ShopItemCatalog { id: "sword", name: "Toy Sword", category: "accessory", price: 20, asset_url: "/static/assets/items/sword.png" },
-        ShopItemCatalog { id: "balloon", name: "Red Balloon", category: "accessory", price: 8, asset_url: "/static/assets/items/balloon.png" },
-        // Backgrounds
-        ShopItemCatalog { id: "space", name: "Space Galaxy", category: "background", price: 40, asset_url: "/static/assets/backgrounds/space.png" },
-        ShopItemCatalog { id: "forest", name: "Magical Forest", category: "background", price: 30, asset_url: "/static/assets/backgrounds/forest.png" },
-        ShopItemCatalog { id: "castle", name: "Candy Castle", category: "background", price: 35, asset_url: "/static/assets/backgrounds/castle.png" },
-    ]
-}
-
-// -------------------------------------------------------------
 // FEDERATION / NODEINFO / PROFILE SCRAPING
 // -------------------------------------------------------------
 
-pub async fn get_well_known_nodeinfo() -> impl IntoResponse {
+pub async fn get_well_known_nodeinfo(
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let host = headers.get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("localhost:3000");
+    
+    let proto = headers.get("x-forwarded-proto")
+        .and_then(|p| p.to_str().ok())
+        .unwrap_or("http");
+
+    let href = format!("{}://{}/nodeinfo/2.0", proto, host);
     let json = serde_json::json!({
         "links": [
             {
-                "rel": "http://nodeinfo.diaspora.gene.ar/schema/2.0",
-                "href": "/nodeinfo/2.0"
+                "rel": "http://nodeinfo.diaspora.software/ns/schema/2.0",
+                "href": href
             }
         ]
     });
@@ -1015,6 +1048,15 @@ pub async fn get_nodeinfo_2_0(
     let user_count = {
         let conn = state.db.lock().unwrap();
         conn.query_row("SELECT COUNT(*) FROM users", params![], |row| row.get::<_, i64>(0)).unwrap_or(0)
+    };
+
+    let peers = {
+        let conn = state.db.lock().unwrap();
+        db::get_known_instances(&conn)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|ki| ki.domain)
+            .collect::<Vec<String>>()
     };
 
     let json = serde_json::json!({
@@ -1036,7 +1078,9 @@ pub async fn get_nodeinfo_2_0(
                 "total": user_count
             }
         },
-        "metadata": {}
+        "metadata": {
+            "peers": peers
+        }
     });
     (StatusCode::OK, Json(json))
 }
@@ -1066,10 +1110,13 @@ pub async fn get_user_profile_html(
 
     let host = headers.get("host")
         .and_then(|h| h.to_str().ok())
-        .map(|h| format!("http://{}", h))
-        .unwrap_or_else(|| "http://localhost:3000".to_string());
+        .unwrap_or("localhost:3000");
 
-    let avatar_svg_url = format!("{}/api/avatar-svg/{}?{}", host, username, query_params);
+    let proto = headers.get("x-forwarded-proto")
+        .and_then(|p| p.to_str().ok())
+        .unwrap_or("http");
+
+    let avatar_svg_url = format!("{}://{}/api/avatar-svg/{}?{}", proto, host, username, query_params);
 
     let html = format!(
         r#"<!DOCTYPE html>
@@ -1105,7 +1152,7 @@ pub async fn get_user_profile_html(
     </div>
 
     <script type="module">
-        import {{ renderAvatar }} from '/static/avatar-renderer.js';
+        import {{ renderAvatar }} from '/static/avatar-renderer.js?v=2';
         const equipped = {{
             top: {top_json},
             bottom: {bottom_json},
@@ -1173,14 +1220,14 @@ pub async fn get_avatar_svg(
             let conn = state.db.lock().unwrap();
             let base = match db::get_user(&conn, &username) {
                 Ok(Some(u)) => u.avatar_base,
-                _ => "kid_boy".to_string(),
+                _ => "cat".to_string(),
             };
             let equipped = db::get_equipped(&conn, &username).unwrap_or_default();
             (base, equipped)
         }
     };
 
-    let svg = build_avatar_svg_string(&base, &equipped);
+    let svg = build_avatar_svg_string(&base, &equipped, &state.assets);
 
     let mut headers = HeaderMap::new();
     headers.insert("Content-Type", "image/svg+xml".parse().unwrap());
@@ -1188,265 +1235,54 @@ pub async fn get_avatar_svg(
     (StatusCode::OK, headers, svg)
 }
 
-fn get_base_svg_paths(base: &str) -> &'static str {
-    match base {
-        "kid_boy" => r##"
-            <!-- Body -->
-            <path d="M 60 180 C 60 150, 140 150, 140 180 Z" fill="#4dabf7" stroke="#1c7ed6" stroke-width="3" />
-            <path d="M 90 155 L 90 170 L 110 170 L 110 155 Z" fill="#ffd8a8" stroke="#f76707" stroke-width="2" />
-            <!-- Head -->
-            <circle cx="100" cy="100" r="50" fill="#ffe066" stroke="#f59f00" stroke-width="3" />
-            <!-- Eyes -->
-            <circle cx="85" cy="95" r="7" fill="#212529" />
-            <circle cx="83" cy="93" r="2.5" fill="#fff" />
-            <circle cx="115" cy="95" r="7" fill="#212529" />
-            <circle cx="113" cy="93" r="2.5" fill="#fff" />
-            <!-- Smile -->
-            <path d="M 85 118 Q 100 135 115 118" fill="none" stroke="#e03131" stroke-width="4" stroke-linecap="round" />
-            <!-- Cheeks -->
-            <circle cx="75" cy="110" r="6" fill="#ffc9c9" opacity="0.6" />
-            <circle cx="125" cy="110" r="6" fill="#ffc9c9" opacity="0.6" />
-            <!-- Default Hair -->
-            <path d="M 50 100 C 45 60, 155 60, 150 100 C 130 90, 70 90, 50 100 Z" fill="#862e9c" />
-        "##,
-        "kid_girl" => r##"
-            <!-- Body -->
-            <path d="M 60 180 C 60 150, 140 150, 140 180 Z" fill="#ff8787" stroke="#fa5252" stroke-width="3" />
-            <path d="M 90 155 L 90 170 L 110 170 L 110 155 Z" fill="#ffd8a8" stroke="#f76707" stroke-width="2" />
-            <!-- Head -->
-            <circle cx="100" cy="100" r="50" fill="#ffd8a8" stroke="#e67e22" stroke-width="3" />
-            <!-- Eyes -->
-            <circle cx="85" cy="95" r="7" fill="#212529" />
-            <circle cx="83" cy="93" r="2.5" fill="#fff" />
-            <circle cx="115" cy="95" r="7" fill="#212529" />
-            <circle cx="113" cy="93" r="2.5" fill="#fff" />
-            <!-- Smile -->
-            <path d="M 85 118 Q 100 135 115 118" fill="none" stroke="#e03131" stroke-width="4" stroke-linecap="round" />
-            <!-- Hair Braids -->
-            <circle cx="45" cy="115" r="14" fill="#d9480f" />
-            <circle cx="155" cy="115" r="14" fill="#d9480f" />
-            <path d="M 50 100 C 45 55, 155 55, 150 100 Z" fill="#d9480f" />
-        "##,
-        "cat" => r##"
-            <!-- Body -->
-            <path d="M 60 180 C 60 145, 140 145, 140 180 Z" fill="#ff922b" stroke="#d9480f" stroke-width="3" />
-            <!-- Ears -->
-            <polygon points="50,70 80,40 85,85" fill="#ff922b" stroke="#d9480f" stroke-width="3" />
-            <polygon points="58,68 78,48 81,78" fill="#ffc078" />
-            <polygon points="150,70 120,40 115,85" fill="#ff922b" stroke="#d9480f" stroke-width="3" />
-            <polygon points="142,68 122,48 119,78" fill="#ffc078" />
-            <!-- Head -->
-            <circle cx="100" cy="100" r="50" fill="#ff922b" stroke="#d9480f" stroke-width="3" />
-            <!-- Eyes -->
-            <ellipse cx="80" cy="95" rx="6" ry="8" fill="#212529" />
-            <circle cx="78" cy="92" r="2.5" fill="#fff" />
-            <ellipse cx="120" cy="95" rx="6" ry="8" fill="#212529" />
-            <circle cx="118" cy="92" r="2.5" fill="#fff" />
-            <!-- Snout & Nose -->
-            <polygon points="96,108 104,108 100,113" fill="#e03131" />
-            <path d="M 94 116 Q 100 122 106 116" fill="none" stroke="#212529" stroke-width="2" />
-            <!-- Whiskers -->
-            <line x1="72" y1="112" x2="45" y2="108" stroke="#495057" stroke-width="2" />
-            <line x1="72" y1="117" x2="42" y2="119" stroke="#495057" stroke-width="2" />
-            <line x1="128" y1="112" x2="155" y2="108" stroke="#495057" stroke-width="2" />
-            <line x1="128" y1="117" x2="158" y2="119" stroke="#495057" stroke-width="2" />
-        "##,
-        "dog" => r##"
-            <!-- Body -->
-            <path d="M 60 180 C 60 145, 140 145, 140 180 Z" fill="#a9e34b" stroke="#74b816" stroke-width="3" />
-            <!-- Floppy Ears -->
-            <path d="M 45 75 C 30 75, 35 125, 55 120 Z" fill="#868e96" stroke="#495057" stroke-width="3" />
-            <path d="M 155 75 C 170 75, 165 125, 145 120 Z" fill="#868e96" stroke="#495057" stroke-width="3" />
-            <!-- Head -->
-            <circle cx="100" cy="100" r="50" fill="#f1f3f5" stroke="#ced4da" stroke-width="3" />
-            <!-- Spots -->
-            <ellipse cx="80" cy="90" rx="14" ry="18" fill="#868e96" opacity="0.4" />
-            <!-- Eyes -->
-            <circle cx="80" cy="95" r="7" fill="#212529" />
-            <circle cx="78" cy="92" r="2.5" fill="#fff" />
-            <circle cx="120" cy="95" r="7" fill="#212529" />
-            <circle cx="118" cy="92" r="2.5" fill="#fff" />
-            <!-- Nose & Mouth -->
-            <ellipse cx="100" cy="112" rx="7" ry="5" fill="#212529" />
-            <path d="M 94 118 Q 100 125 106 118" fill="none" stroke="#212529" stroke-width="2.5" stroke-linecap="round" />
-        "##,
-        "alien" => r##"
-            <!-- Body -->
-            <path d="M 60 180 C 60 145, 140 145, 140 180 Z" fill="#69db7c" stroke="#2b8a3e" stroke-width="3" />
-            <!-- Antennae -->
-            <line x1="80" y1="58" x2="65" y2="35" stroke="#2b8a3e" stroke-width="4" />
-            <circle cx="65" cy="35" r="8" fill="#ffd23f" stroke="#2b8a3e" stroke-width="2" />
-            <line x1="120" y1="58" x2="135" y2="35" stroke="#2b8a3e" stroke-width="4" />
-            <circle cx="135" cy="35" r="8" fill="#ffd23f" stroke="#2b8a3e" stroke-width="2" />
-            <!-- Head -->
-            <ellipse cx="100" cy="105" rx="55" ry="45" fill="#69db7c" stroke="#2b8a3e" stroke-width="3" />
-            <!-- Three Eyes -->
-            <circle cx="75" cy="98" r="8" fill="#fff" stroke="#2b8a3e" stroke-width="1.5" />
-            <circle cx="75" cy="98" r="4" fill="#364fc7" />
-            <circle cx="100" cy="90" r="10" fill="#fff" stroke="#2b8a3e" stroke-width="1.5" />
-            <circle cx="100" cy="90" r="5" fill="#364fc7" />
-            <circle cx="125" cy="98" r="8" fill="#fff" stroke="#2b8a3e" stroke-width="1.5" />
-            <circle cx="125" cy="98" r="4" fill="#364fc7" />
-            <!-- Mouth -->
-            <path d="M 85 125 Q 100 138 115 125" fill="none" stroke="#2b8a3e" stroke-width="4" stroke-linecap="round" />
-        "##,
-        _ => "",
-    }
-}
-
-fn get_item_svg_paths(item: &str) -> &'static str {
-    match item {
-        "party_hat" => r##"
-            <polygon points="100,10 70,60 130,60" fill="#ff6b6b" stroke="#e03131" stroke-width="2" />
-            <circle cx="100" cy="10" r="6" fill="#ffd23f" />
-            <line x1="80" y1="40" x2="120" y2="40" stroke="#fff" stroke-dasharray="3,3" stroke-width="2" />
-        "##,
-        "crown" => r##"
-            <polygon points="65,65 75,40 100,55 125,40 135,65" fill="#ffd23f" stroke="#f59f00" stroke-width="2" />
-            <rect x="65" y="65" width="70" height="8" fill="#ffd23f" stroke="#f59f00" stroke-width="2" />
-            <circle cx="75" cy="40" r="3" fill="#ff1744" />
-            <circle cx="100" cy="55" r="3" fill="#00e676" />
-            <circle cx="125" cy="40" r="3" fill="#364fc7" />
-        "##,
-        "cowboy_hat" => r##"
-            <ellipse cx="100" cy="62" rx="35" ry="18" fill="#85583f" stroke="#5c3826" stroke-width="2" />
-            <path d="M 50 68 Q 100 78 150 68 C 145 60, 55 60, 50 68 Z" fill="#a06a42" stroke="#5c3826" stroke-width="2" />
-        "##,
-        "pirate_hat" => r##"
-            <path d="M 55 68 Q 100 48 145 68 C 135 60, 65 60, 55 68 Z" fill="#212529" stroke="#000" stroke-width="2" />
-            <path d="M 75 62 Q 100 66 125 62 Q 100 78 75 62 Z" fill="#212529" stroke="#000" stroke-width="2" />
-            <circle cx="100" cy="62" r="3.5" fill="#fff" />
-            <line x1="95" y1="58" x2="105" y2="66" stroke="#fff" stroke-width="1.2" />
-            <line x1="105" y1="58" x2="95" y2="66" stroke="#fff" stroke-width="1.2" />
-        "##,
-        "superhero_cape" => r##"
-            <path d="M 68 140 L 40 195 L 160 195 L 132 140 Z" fill="#ff1744" stroke="#d50000" stroke-width="2" />
-        "##,
-        "hoodie" => r##"
-            <path d="M 60 180 C 60 148, 140 148, 140 180 Z" fill="#ff6b6b" stroke="#e03131" stroke-width="2.5" />
-            <line x1="94" y1="150" x2="94" y2="168" stroke="#fff" stroke-width="2" stroke-linecap="round" />
-            <line x1="106" y1="150" x2="106" y2="168" stroke="#fff" stroke-width="2" stroke-linecap="round" />
-        "##,
-        "royal_robe" => r##"
-            <path d="M 58 180 C 58 146, 142 146, 142 180 Z" fill="#862e9c" stroke="#6b21a8" stroke-width="2.5" />
-            <path d="M 85 148 L 100 180 L 115 148 Z" fill="#ffd23f" />
-            <ellipse cx="100" cy="146" rx="20" ry="6" fill="#f8f9fa" />
-        "##,
-        "denim_shorts" => r##"
-            <path d="M 64 175 C 64 168, 136 168, 136 175 L 134 188 L 102 188 L 102 180 L 98 180 L 98 188 L 66 188 Z" fill="#364fc7" stroke="#1b2e88" stroke-width="2" />
-        "##,
-        "grass_skirt" => r##"
-            <rect x="62" y="166" width="76" height="4" fill="#a06a42" />
-            <path d="M 64 170 L 68 190 M 74 170 L 78 192 M 84 170 L 87 194 M 94 170 L 96 195 M 104 170 L 103 195 M 114 170 L 111 194 M 124 170 L 120 192 M 134 170 L 130 190" stroke="#51cf66" stroke-width="5" stroke-linecap="round" />
-        "##,
-        "mohawk" => r##"
-            <path d="M 100,25 C 103,45, 97,45, 100,55" fill="none" stroke="#f06595" stroke-width="12" stroke-linecap="round" />
-            <path d="M 100,25 L 94,40 M 100,30 L 106,45 M 100,20 L 92,35" stroke="#f285c7" stroke-width="3" />
-        "##,
-        "rainbow_hair" => r##"
-            <defs>
-                <linearGradient id="rainbow-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%" stop-color="#ff1744" />
-                    <stop offset="25%" stop-color="#ffd23f" />
-                    <stop offset="50%" stop-color="#00e676" />
-                    <stop offset="75%" stop-color="#00e5ff" />
-                    <stop offset="100%" stop-color="#b967ff" />
-                </linearGradient>
-            </defs>
-            <path d="M 45 92 C 40 70, 160 70, 155 92 C 160 110, 150 145, 145 155 M 45 92 C 40 110, 50 145, 55 155" fill="none" stroke="url(#rainbow-grad)" stroke-width="8" stroke-linecap="round" />
-        "##,
-        "magic_wand" => r##"
-            <line x1="135" y1="170" x2="175" y2="120" stroke="#85583f" stroke-width="4" stroke-linecap="round" />
-            <polygon points="175,120 178,112 186,110 180,104 182,96 175,100 168,96 170,104 164,110 172,112" fill="#ffd23f" stroke="#f59f00" stroke-width="1.5" />
-            <circle cx="175" cy="120" r="15" fill="rgba(255, 210, 63, 0.3)" opacity="0.6" />
-        "##,
-        "sword" => r##"
-            <line x1="140" y1="160" x2="160" y2="180" stroke="#f59f00" stroke-width="5" />
-            <line x1="135" y1="170" x2="155" y2="150" stroke="#e67e22" stroke-width="8" stroke-linecap="round" />
-            <polygon points="135,165 178,110 184,116 141,171" fill="#ced4da" stroke="#868e96" stroke-width="1.5" />
-            <line x1="138" y1="168" x2="181" y2="113" stroke="#adb5bd" stroke-width="1.5" />
-        "##,
-        "balloon" => r##"
-            <path d="M 145 160 Q 155 170 148 190" fill="none" stroke="#adb5bd" stroke-width="1.5" />
-            <ellipse cx="145" cy="130" rx="18" ry="24" fill="#ff1744" stroke="#d50000" stroke-width="2" />
-            <polygon points="142,154 148,154 145,159" fill="#ff1744" stroke="#d50000" stroke-width="1.5" />
-            <ellipse cx="138" cy="122" rx="4" ry="7" fill="#fff" opacity="0.6" transform="rotate(-15, 138, 122)" />
-        "##,
-        "space" => r##"
-            <defs>
-                <linearGradient id="space-grad" x1="0%" y1="0%" x2="0%" y2="100%">
-                    <stop offset="0%" stop-color="#0b091a" />
-                    <stop offset="100%" stop-color="#1b1542" />
-                </linearGradient>
-            </defs>
-            <rect x="0" y="0" width="200" height="200" fill="url(#space-grad)" />
-            <circle cx="30" cy="40" r="1.5" fill="#fff" opacity="0.8" />
-            <circle cx="170" cy="50" r="1" fill="#fff" opacity="0.6" />
-            <circle cx="80" cy="160" r="1.5" fill="#fff" opacity="0.9" />
-            <circle cx="160" cy="150" r="2" fill="#ffd23f" opacity="0.7" />
-            <circle cx="40" cy="140" r="12" fill="#ff7675" />
-            <path d="M 22 145 Q 40 135 58 145" fill="none" stroke="#ffd23f" stroke-width="2" />
-        "##,
-        "forest" => r##"
-            <defs>
-                <linearGradient id="forest-grad" x1="0%" y1="0%" x2="0%" y2="100%">
-                    <stop offset="0%" stop-color="#2b8a3e" />
-                    <stop offset="100%" stop-color="#0b3a1a" />
-                </linearGradient>
-            </defs>
-            <rect x="0" y="0" width="200" height="200" fill="url(#forest-grad)" />
-            <polygon points="30,120 15,160 45,160" fill="#082c14" />
-            <polygon points="30,100 20,130 40,130" fill="#082c14" />
-            <polygon points="170,110 155,150 185,150" fill="#082c14" />
-            <polygon points="170,90 160,120 180,120" fill="#082c14" />
-        "##,
-        "castle" => r##"
-            <defs>
-                <linearGradient id="castle-grad" x1="0%" y1="0%" x2="0%" y2="100%">
-                    <stop offset="0%" stop-color="#f06595" />
-                    <stop offset="100%" stop-color="#4c0519" />
-                </linearGradient>
-            </defs>
-            <rect x="0" y="0" width="200" height="200" fill="url(#castle-grad)" />
-            <rect x="60" y="120" width="80" height="80" fill="#2d0611" />
-            <rect x="40" y="100" width="25" height="100" fill="#1f030a" />
-            <polygon points="40,100 52.5,70 65,100" fill="#ff8787" />
-            <rect x="135" y="100" width="25" height="100" fill="#1f030a" />
-            <polygon points="135,100 147.5,70 160,100" fill="#ff8787" />
-            <path d="M 85 200 C 85 160, 115 160, 115 200 Z" fill="#f06595" />
-        "##,
-        _ => "",
-    }
-}
-
-fn build_avatar_svg_string(base: &str, equipped: &EquippedItems) -> String {
+fn build_avatar_svg_string(
+    base: &str,
+    equipped: &EquippedItems,
+    assets: &crate::assets::AssetCatalog,
+) -> String {
     let mut inner = String::new();
 
     if let Some(ref bg) = equipped.background {
-        inner.push_str(get_item_svg_paths(bg));
+        if let Some(svg) = assets.items_map.get(bg) {
+            inner.push_str(svg);
+        }
     }
     if let Some(ref top) = equipped.top {
         if top == "superhero_cape" {
-            inner.push_str(get_item_svg_paths(top));
+            if let Some(svg) = assets.items_map.get(top) {
+                inner.push_str(svg);
+            }
         }
     }
-    inner.push_str(get_base_svg_paths(base));
+    if let Some(svg) = assets.bases_map.get(base) {
+        inner.push_str(svg);
+    }
     if let Some(ref hair) = equipped.hair {
-        inner.push_str(get_item_svg_paths(hair));
+        if let Some(svg) = assets.items_map.get(hair) {
+            inner.push_str(svg);
+        }
     }
     if let Some(ref top) = equipped.top {
         if top != "superhero_cape" {
-            inner.push_str(get_item_svg_paths(top));
+            if let Some(svg) = assets.items_map.get(top) {
+                inner.push_str(svg);
+            }
         }
     }
     if let Some(ref bottom) = equipped.bottom {
-        inner.push_str(get_item_svg_paths(bottom));
+        if let Some(svg) = assets.items_map.get(bottom) {
+            inner.push_str(svg);
+        }
     }
     if let Some(ref hat) = equipped.hat {
-        inner.push_str(get_item_svg_paths(hat));
+        if let Some(svg) = assets.items_map.get(hat) {
+            inner.push_str(svg);
+        }
     }
     if let Some(ref acc) = equipped.accessory {
-        inner.push_str(get_item_svg_paths(acc));
+        if let Some(svg) = assets.items_map.get(acc) {
+            inner.push_str(svg);
+        }
     }
 
     format!(

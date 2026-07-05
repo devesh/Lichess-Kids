@@ -1,0 +1,8 @@
+# Lichess Kids Caddyfile Configuration Template
+# Save as Caddyfile or import in your main Caddyfile config
+
+lichesskids.example.com {
+    # Automatic HTTPS and ACME challenge handling is enabled out of the box by Caddy
+    
+    reverse_proxy 127.0.0.1:64355
+}

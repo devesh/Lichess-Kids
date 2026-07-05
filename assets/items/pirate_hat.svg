@@ -1,0 +1,8 @@
+<svg viewBox="0 0 200 200" width="100%" height="100%">
+            <path d="M 55 68 Q 100 48 145 68 C 135 60, 65 60, 55 68 Z" fill="#212529" stroke="#000" stroke-width="2" />
+            <path d="M 75 62 Q 100 66 125 62 Q 100 78 75 62 Z" fill="#212529" stroke="#000" stroke-width="2" />
+            <!-- Skull and Crossbones -->
+            <circle cx="100" cy="62" r="3.5" fill="#fff" />
+            <line x1="95" y1="58" x2="105" y2="66" stroke="#fff" stroke-width="1.2" />
+            <line x1="105" y1="58" x2="95" y2="66" stroke="#fff" stroke-width="1.2" />
+        </svg>

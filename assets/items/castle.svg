@@ -1,0 +1,17 @@
+<svg viewBox="0 0 200 200" width="100%" height="100%">
+            <defs>
+                <linearGradient id="castle-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" stop-color="#f06595" />
+                    <stop offset="100%" stop-color="#4c0519" />
+                </linearGradient>
+            </defs>
+            <rect x="0" y="0" width="200" height="200" fill="url(#castle-grad)" />
+            <!-- Castle Silhouette -->
+            <rect x="60" y="120" width="80" height="80" fill="#2d0611" />
+            <rect x="40" y="100" width="25" height="100" fill="#1f030a" />
+            <polygon points="40,100 52.5,70 65,100" fill="#ff8787" />
+            <rect x="135" y="100" width="25" height="100" fill="#1f030a" />
+            <polygon points="135,100 147.5,70 160,100" fill="#ff8787" />
+            <!-- Gateway -->
+            <path d="M 85 200 C 85 160, 115 160, 115 200 Z" fill="#f06595" />
+        </svg>

@@ -4,9 +4,10 @@ After=network-online.target
 
 [Container]
 Image=localhost/lichesskids:latest
-PublishPort=3000:3000
+PublishPort=64355:64355
 Volume=lichesskids-db.volume:/data:Z
-Environment=PORT=3000
+Volume=lichesskids-assets.volume:/app/assets:Z
+Environment=PORT=64355
 Environment=DATABASE_URL=/data/lichesskids.db
 
 [Install]

@@ -34,13 +34,14 @@ COPY --from=builder /usr/src/lichesskids/target/release/lichesskids /usr/local/b
 
 # Copy static frontend assets
 COPY static ./static
+COPY assets ./assets
 
 # Set runtime environment defaults
 RUN mkdir -p /data
-ENV PORT=3000
+ENV PORT=64355
 ENV DATABASE_URL=/data/lichesskids.db
 
-EXPOSE 3000
+EXPOSE 64355
 
 # Run the server
 CMD ["lichesskids"]

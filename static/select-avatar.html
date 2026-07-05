@@ -14,28 +14,7 @@
                 Welcome to Lichess Kids! Pick your base character to start your adventure. You can customize them with clothes, hats, and accessories later!
             </p>
 
-            <div class="avatar-grid">
-                <div class="avatar-select-card" data-base="kid_boy">
-                    <div id="svg-kid-boy" class="avatar-select-icon"></div>
-                    <h4 style="margin-top: 10px;">Kid Boy</h4>
-                </div>
-                <div class="avatar-select-card" data-base="kid_girl">
-                    <div id="svg-kid-girl" class="avatar-select-icon"></div>
-                    <h4 style="margin-top: 10px;">Kid Girl</h4>
-                </div>
-                <div class="avatar-select-card" data-base="cat">
-                    <div id="svg-cat" class="avatar-select-icon"></div>
-                    <h4 style="margin-top: 10px;">Cute Cat</h4>
-                </div>
-                <div class="avatar-select-card" data-base="dog">
-                    <div id="svg-dog" class="avatar-select-icon"></div>
-                    <h4 style="margin-top: 10px;">Playful Dog</h4>
-                </div>
-                <div class="avatar-select-card" data-base="alien">
-                    <div id="svg-alien" class="avatar-select-icon"></div>
-                    <h4 style="margin-top: 10px;">Friendly Alien</h4>
-                </div>
-            </div>
+            <div class="avatar-grid"></div>
 
             <button id="submit-avatar-btn" class="btn btn-primary" style="width: 100%; font-size: 1.1rem; padding: 14px;" disabled>
                 Let's Play!
@@ -44,26 +23,48 @@
     </div>
 
     <script type="module">
-        import { renderAvatar } from '/static/avatar-renderer.js';
+        import { renderAvatar, initAssets } from '/static/avatar-renderer.js?v=2';
 
-        // Render the preview shapes
-        renderAvatar(document.getElementById('svg-kid-boy'), 'kid_boy');
-        renderAvatar(document.getElementById('svg-kid-girl'), 'kid_girl');
-        renderAvatar(document.getElementById('svg-cat'), 'cat');
-        renderAvatar(document.getElementById('svg-dog'), 'dog');
-        renderAvatar(document.getElementById('svg-alien'), 'alien');
+        // Load catalog and init assets
+        const catalogRes = await fetch('/api/assets/catalog');
+        const catalog = await catalogRes.json();
+        initAssets(catalog);
+
+        const grid = document.querySelector('.avatar-grid');
+        grid.innerHTML = '';
+        
+        catalog.bases.forEach(base => {
+            const card = document.createElement('div');
+            card.className = 'avatar-select-card';
+            card.dataset.base = base.id;
+            
+            const iconDiv = document.createElement('div');
+            iconDiv.id = `svg-${base.id}`;
+            iconDiv.className = 'avatar-select-icon';
+            card.appendChild(iconDiv);
+            
+            const title = document.createElement('h4');
+            title.style.marginTop = '10px';
+            title.textContent = base.name;
+            card.appendChild(title);
+            
+            grid.appendChild(card);
+            
+            // Render this base
+            renderAvatar(iconDiv, base.id);
+        });
 
         let selectedAvatar = null;
-        const cards = document.querySelectorAll('.avatar-select-card');
         const submitBtn = document.getElementById('submit-avatar-btn');
 
-        cards.forEach(card => {
-            card.addEventListener('click', () => {
-                cards.forEach(c => c.classList.remove('selected'));
-                card.classList.add('selected');
-                selectedAvatar = card.dataset.base;
-                submitBtn.disabled = false;
-            });
+        grid.addEventListener('click', (e) => {
+            const card = e.target.closest('.avatar-select-card');
+            if (!card) return;
+            
+            document.querySelectorAll('.avatar-select-card').forEach(c => c.classList.remove('selected'));
+            card.classList.add('selected');
+            selectedAvatar = card.dataset.base;
+            submitBtn.disabled = false;
         });
 
         submitBtn.addEventListener('click', async () => {
