@@ -388,3 +388,21 @@ pub async fn fetch_public_profile(username: &str) -> Result<LichessPublicProfile
     response.error_for_status()?.json::<LichessPublicProfile>().await
 }
 
+pub async fn update_profile_links(token: &str, links: &str) -> Result<(), reqwest::Error> {
+    if token == "mock_token" {
+        return Ok(());
+    }
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://lichess.org/api/me/profile")
+        .bearer_auth(token)
+        .header("User-Agent", "LichessKids-App/1.0")
+        .form(&[("links", links)])
+        .send()
+        .await?;
+
+    let _ = response.error_for_status();
+    Ok(())
+}
+

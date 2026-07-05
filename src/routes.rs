@@ -424,6 +424,29 @@ pub async fn claim_sync(
         }
     }
 
+    // Automatically link profile if missing
+    if let Some(ref t) = token {
+        let host = headers.get("host")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("localhost:64355");
+        let proto = headers.get("x-forwarded-proto")
+            .and_then(|p| p.to_str().ok())
+            .unwrap_or("http");
+        let profile_link = format!("{}://{}/profile/{}", proto, host, username);
+
+        if let Ok(pub_p) = lichess::fetch_public_profile(&username).await {
+            let current_links = pub_p.profile.as_ref().and_then(|p| p.links.clone()).unwrap_or_default();
+            if !current_links.contains(&profile_link) {
+                let new_links = if current_links.is_empty() {
+                    profile_link.clone()
+                } else {
+                    format!("{}\n{}", current_links, profile_link)
+                };
+                let _ = lichess::update_profile_links(t, &new_links).await;
+            }
+        }
+    }
+
     // 2. Fetch and evaluate games
     // A spin for every person/bot you beat with rating >= user's rating at time of play
     let games = match lichess::fetch_games(&username, token.as_deref(), 30).await {
