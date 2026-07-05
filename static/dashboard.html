@@ -547,14 +547,14 @@
         // Inline item miniatures rendering
         import { renderAvatar as drawMiniItem } from '/static/avatar-renderer.js?v=2';
         function renderItemPreview(element, itemId, category) {
-            // Reuses renderAvatar but renders it on a dummy kid body so we only see the item
+            // Reuses renderAvatar but renders it on user's actual base avatar so they see how it looks
             const equippedMock = {};
             equippedMock[category] = itemId;
-            // Draw background if category is background, otherwise draw it with blank base
             if (category === 'background') {
                 drawMiniItem(element, '', equippedMock);
             } else {
-                drawMiniItem(element, 'cat', equippedMock);
+                const base = (userProfile && userProfile.avatar_base) ? userProfile.avatar_base : 'cat';
+                drawMiniItem(element, base, equippedMock);
             }
         }
 
