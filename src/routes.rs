@@ -1175,16 +1175,26 @@ pub async fn get_user_profile_html(
     </div>
 
     <script type="module">
-        import {{ renderAvatar }} from '/static/avatar-renderer.js?v=2';
-        const equipped = {{
-            top: {top_json},
-            bottom: {bottom_json},
-            hat: {hat_json},
-            hair: {hair_json},
-            accessory: {accessory_json},
-            background: {background_json}
-        }};
-        renderAvatar(document.getElementById('avatar-container'), "{avatar_base}", equipped);
+        import {{ renderAvatar, initAssets }} from '/static/avatar-renderer.js?v=2';
+        async function init() {{
+            try {{
+                const res = await fetch('/api/assets/catalog');
+                const catalog = await res.json();
+                initAssets(catalog);
+            }} catch (err) {{
+                console.error("Failed to load catalog:", err);
+            }}
+            const equipped = {{
+                top: {top_json},
+                bottom: {bottom_json},
+                hat: {hat_json},
+                hair: {hair_json},
+                accessory: {accessory_json},
+                background: {background_json}
+            }};
+            renderAvatar(document.getElementById('avatar-container'), "{avatar_base}", equipped);
+        }}
+        init();
     </script>
 </body>
 </html>"#,
