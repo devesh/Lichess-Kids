@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select Your Avatar - Lichess Kids</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="select-avatar-container">
+        <div class="glass-panel" style="margin: 40px auto; max-width: 600px;">
+            <h1 style="font-size: 2.2rem; margin-bottom: 10px;">Choose Your Avatar!</h1>
+            <p style="color: var(--text-secondary); margin-bottom: 30px;">
+                Welcome to Lichess Kids! Pick your base character to start your adventure. You can customize them with clothes, hats, and accessories later!
+            </p>
+
+            <div class="avatar-grid">
+                <div class="avatar-select-card" data-base="kid_boy">
+                    <div id="svg-kid-boy" class="avatar-select-icon"></div>
+                    <h4 style="margin-top: 10px;">Kid Boy</h4>
+                </div>
+                <div class="avatar-select-card" data-base="kid_girl">
+                    <div id="svg-kid-girl" class="avatar-select-icon"></div>
+                    <h4 style="margin-top: 10px;">Kid Girl</h4>
+                </div>
+                <div class="avatar-select-card" data-base="cat">
+                    <div id="svg-cat" class="avatar-select-icon"></div>
+                    <h4 style="margin-top: 10px;">Cute Cat</h4>
+                </div>
+                <div class="avatar-select-card" data-base="dog">
+                    <div id="svg-dog" class="avatar-select-icon"></div>
+                    <h4 style="margin-top: 10px;">Playful Dog</h4>
+                </div>
+                <div class="avatar-select-card" data-base="alien">
+                    <div id="svg-alien" class="avatar-select-icon"></div>
+                    <h4 style="margin-top: 10px;">Friendly Alien</h4>
+                </div>
+            </div>
+
+            <button id="submit-avatar-btn" class="btn btn-primary" style="width: 100%; font-size: 1.1rem; padding: 14px;" disabled>
+                Let's Play!
+            </button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { renderAvatar } from '/static/avatar-renderer.js';
+
+        // Render the preview shapes
+        renderAvatar(document.getElementById('svg-kid-boy'), 'kid_boy');
+        renderAvatar(document.getElementById('svg-kid-girl'), 'kid_girl');
+        renderAvatar(document.getElementById('svg-cat'), 'cat');
+        renderAvatar(document.getElementById('svg-dog'), 'dog');
+        renderAvatar(document.getElementById('svg-alien'), 'alien');
+
+        let selectedAvatar = null;
+        const cards = document.querySelectorAll('.avatar-select-card');
+        const submitBtn = document.getElementById('submit-avatar-btn');
+
+        cards.forEach(card => {
+            card.addEventListener('click', () => {
+                cards.forEach(c => c.classList.remove('selected'));
+                card.classList.add('selected');
+                selectedAvatar = card.dataset.base;
+                submitBtn.disabled = false;
+            });
+        });
+
+        submitBtn.addEventListener('click', async () => {
+            if (!selectedAvatar) return;
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const isMock = urlParams.get('mock') === 'true';
+            const mockUsername = urlParams.get('username');
+
+            try {
+                if (isMock && mockUsername) {
+                    // Local Mock Mode complete registration
+                    const res = await fetch('/api/mock/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username: mockUsername, avatar_base: selectedAvatar })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        window.location.href = '/dashboard.html';
+                    } else {
+                        alert(data.error || 'Failed to select avatar');
+                    }
+                } else {
+                    // Real OAuth complete registration
+                    const res = await fetch('/api/select-avatar', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ avatar_base: selectedAvatar })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        window.location.href = '/dashboard.html';
+                    } else {
+                        alert(data.error || 'Failed to select avatar');
+                    }
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Error connecting to local server');
+            }
+        });
+    </script>
+</body>
+</html>
