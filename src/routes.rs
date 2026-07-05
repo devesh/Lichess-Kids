@@ -859,6 +859,37 @@ async fn try_discover_remote_profile(f_name: &str, db: Arc<Mutex<Connection>>) -
         }
     }
 
+    // Fallback: If no candidate URLs are found in Lichess links, try querying all cached known instances directly!
+    if remote_url.is_none() {
+        let instances = {
+            let conn = db.lock().unwrap();
+            db::get_known_instances(&conn).unwrap_or_default()
+        };
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(800)) // Use a short timeout to prevent sync delays
+            .build()
+            .ok()?;
+
+        for inst in instances {
+            // Check HTTPS
+            let url = format!("https://{}/user/{}", inst.domain, f_name);
+            if let Ok(res) = client.get(&url).header("User-Agent", "LichessKids-App/1.0").send().await {
+                if res.status().is_success() {
+                    remote_url = Some(url);
+                    break;
+                }
+            }
+            // Check HTTP
+            let url = format!("http://{}/user/{}", inst.domain, f_name);
+            if let Ok(res) = client.get(&url).header("User-Agent", "LichessKids-App/1.0").send().await {
+                if res.status().is_success() {
+                    remote_url = Some(url);
+                    break;
+                }
+            }
+        }
+    }
+
     let url = remote_url?;
 
     // 3. Scrape remote profile page
