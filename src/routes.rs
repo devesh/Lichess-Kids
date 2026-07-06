@@ -645,13 +645,6 @@ pub async fn claim_sync(
                     total_puzzles_processed += new_puzzles.len();
 
                     let oldest_date = chunk_puzzles.last().unwrap().date;
-                    {
-                        let conn = state.db.lock().unwrap();
-                        let current_g_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_game_sync).unwrap_or(0);
-                        let target_puzzle_sync = std::cmp::max(last_puzzle_sync, oldest_date);
-                        let _ = db::update_sync_timestamps(&conn, &username, current_g_sync, target_puzzle_sync);
-                    }
-
                     current_puzzle_before = oldest_date;
 
                     let total_puzzle_dist = sync_start_time - last_puzzle_sync;
