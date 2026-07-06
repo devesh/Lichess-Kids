@@ -98,6 +98,7 @@ pub async fn fetch_games(username: &str, token: &str, since: Option<i64>, until:
         .query(&query)
         .bearer_auth(token)
         .header("User-Agent", "LichessKids-App/1.0")
+        .header("Accept", "application/x-ndjson")
         .send()
         .await?;
     
@@ -134,6 +135,7 @@ pub async fn fetch_puzzle_activity(token: &str, since: Option<i64>, before: Opti
         .query(&query)
         .bearer_auth(token)
         .header("User-Agent", "LichessKids-App/1.0")
+        .header("Accept", "application/x-ndjson")
         .send()
         .await?;
 
@@ -162,6 +164,7 @@ pub async fn fetch_following(token: &str) -> Result<Vec<String>, reqwest::Error>
         .get("https://lichess.org/api/rel/following")
         .bearer_auth(token)
         .header("User-Agent", "LichessKids-App/1.0")
+        .header("Accept", "application/x-ndjson")
         .send()
         .await?;
 
