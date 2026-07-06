@@ -152,5 +152,23 @@ pub async fn fetch_following(token: &str) -> Result<Vec<String>, reqwest::Error>
     Ok(followed)
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LichessRatingHistory {
+    pub name: String,
+    pub points: Vec<Vec<i32>>,
+}
+
+pub async fn fetch_rating_history(username: &str) -> Result<Vec<LichessRatingHistory>, reqwest::Error> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("https://lichess.org/api/user/{}/rating-history", username))
+        .header("User-Agent", "LichessKids-App/1.0")
+        .header("Accept", "application/json")
+        .send()
+        .await?;
+
+    response.error_for_status()?.json::<Vec<LichessRatingHistory>>().await
+}
+
 
 

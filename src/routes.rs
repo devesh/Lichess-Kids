@@ -9,6 +9,7 @@ use axum::{
 };
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use chrono::{TimeZone, Utc, Datelike};
 use base64::Engine;
 use rand::Rng;
 use rusqlite::{params, Connection};
@@ -368,6 +369,7 @@ fn process_puzzles_chunk_backward(
     puzzles_eligible: &mut i32,
     spins_earned_from_puzzles: &mut i32,
     total_eligible: &mut usize,
+    puzzle_history_days: &std::collections::HashSet<(i32, i32, i32)>,
 ) {
     let new_puzzles: Vec<_> = puzzles.iter().filter(|p| p.date > last_puzzle_sync).cloned().collect();
     if new_puzzles.is_empty() {
@@ -379,12 +381,22 @@ fn process_puzzles_chunk_backward(
     let mut running_rating = *current_puzzle_rating;
 
     for p in &new_puzzles {
-        let before_play_rating = if p.win {
-            running_rating - 10
-        } else {
-            running_rating + 10
+        let datetime = match Utc.timestamp_millis_opt(p.date) {
+            chrono::LocalResult::Single(dt) => dt,
+            _ => Utc.timestamp_opt(0, 0).unwrap(),
         };
-        let before_play_rating = std::cmp::max(600, before_play_rating);
+        let y = datetime.year() as i32;
+        let m = datetime.month0() as i32;
+        let d = datetime.day() as i32;
+
+        let is_rated = puzzle_history_days.contains(&(y, m, d));
+
+        let before_play_rating = if is_rated {
+            let change = if p.win { 10 } else { -10 };
+            std::cmp::max(600, running_rating - change)
+        } else {
+            running_rating
+        };
         let min_required_rating = before_play_rating + spin_rules.puzzle_rating_offset;
         
         if p.win && p.puzzle.rating >= min_required_rating {
@@ -526,6 +538,20 @@ pub async fn claim_sync(
             profile_created_at = p.created_at;
         }
 
+        let mut puzzle_history_days = std::collections::HashSet::new();
+        if let Ok(history) = lichess::fetch_rating_history(&username).await {
+            if let Some(p_hist) = history.into_iter().find(|h| h.name == "Puzzles") {
+                for pt in p_hist.points {
+                    if pt.len() >= 3 {
+                        let y = pt[0];
+                        let m = pt[1]; // 0-indexed month
+                        let d = pt[2];
+                        puzzle_history_days.insert((y, m, d));
+                    }
+                }
+            }
+        }
+
         let mut games_eligible = 0;
         let mut games_claimed = 0;
 
@@ -657,6 +683,7 @@ pub async fn claim_sync(
                         &mut puzzles_eligible,
                         &mut spins_earned_from_puzzles,
                         &mut total_eligible,
+                        &puzzle_history_days,
                     );
 
                     total_puzzles_processed += new_puzzles.len();
