@@ -22,7 +22,6 @@ fn test_create_and_get_user() {
     assert_eq!(user.coins, 0);
     assert_eq!(user.spins_available, 0);
     assert_eq!(user.current_game_rating, 1500);
-    assert_eq!(user.current_puzzle_rating, 1500);
 }
 
 #[test]
@@ -31,10 +30,9 @@ fn test_ratings_and_coins() {
     db::create_user(&conn, "alice", "dog").unwrap();
 
     // Update ratings
-    db::update_user_ratings(&conn, "alice", 1600, 1700).unwrap();
+    db::update_user_ratings(&conn, "alice", 1600).unwrap();
     let user = db::get_user(&conn, "alice").unwrap().unwrap();
     assert_eq!(user.current_game_rating, 1600);
-    assert_eq!(user.current_puzzle_rating, 1700);
 
     // Reward coins
     let new_coins = db::reward_coins(&conn, "alice", 15).unwrap();
@@ -166,17 +164,15 @@ fn test_last_synced_at() {
     let conn = setup_in_memory_db();
     db::create_user(&conn, "gabriel", "cat").unwrap();
 
-    let u = db::get_user(&conn, "gabriel").unwrap().unwrap();
+        let u = db::get_user(&conn, "gabriel").unwrap().unwrap();
     assert_eq!(u.last_synced_at, 0);
     assert_eq!(u.last_game_sync, 0);
-    assert_eq!(u.last_puzzle_sync, 0);
 
     db::update_last_synced_at(&conn, "gabriel", 123456789).unwrap();
-    db::update_sync_timestamps(&conn, "gabriel", 987654321, 555666777).unwrap();
+    db::update_sync_timestamps(&conn, "gabriel", 987654321).unwrap();
     let u2 = db::get_user(&conn, "gabriel").unwrap().unwrap();
     assert_eq!(u2.last_synced_at, 123456789);
     assert_eq!(u2.last_game_sync, 987654321);
-    assert_eq!(u2.last_puzzle_sync, 555666777);
 }
 
 #[test]

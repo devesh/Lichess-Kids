@@ -130,8 +130,6 @@
     }
   ],
   "spin_rules": {
-    "game_rating_offset": -100,
-    "puzzle_rating_offset": -100,
-    "puzzles_per_spin": 25
+    "game_rating_offset": -100
   }
 }

@@ -1,6 +1,6 @@
 # Lichess Kids
 
-Lichess Kids is a gamified companion application for younger chess players. By winning games against tougher opponents and solving puzzles on Lichess, players earn spins on a weighted wheel, collect coins, purchase accessories, customize their cute cartoon avatars, and see their friends' customized avatars.
+Lichess Kids is a gamified companion application for younger chess players. By winning games against tougher opponents on Lichess, players earn spins on a weighted wheel, collect coins, purchase accessories, customize their cute cartoon avatars, and see their friends' customized avatars.
 
 ---
 
@@ -104,16 +104,13 @@ By mounting a host directory to `/app/assets`, you can fully customize the conte
 The sync performance requirements can be configured in `/app/assets/metadata.json` under `"spin_rules"`:
 ```json
 "spin_rules": {
-  "game_rating_offset": -100,
-  "puzzle_rating_offset": -100,
-  "puzzles_per_spin": 25
+  "game_rating_offset": -100
 }
 ```
-*   `game_rating_offset` / `puzzle_rating_offset`: Ratings must be within this offset (or higher) relative to the player's rating at the time of the play. Offset `-100` allows players to win spins for matches and puzzles up to 100 points below their current rating.
-*   `puzzles_per_spin`: The number of tactical puzzle solutions required to earn a spin.
+*   `game_rating_offset`: Ratings must be within this offset (or higher) relative to the player's rating at the time of the play. Offset `-100` allows players to win spins for matches against opponents up to 100 points below their current rating.
 
 #### ⚠️ Why Daily Spins are Forbidden
-Spins cannot be awarded for daily logins or daily check-ins. Lichess Kids is designed to encourage learning and practice. Spins and rewards must only be earned as an accomplishment for solving puzzles or winning matches against challenging opponents. Leaving daily spins disabled prevents gamification loop exploitation and focuses the reward feedback loop strictly on active effort.
+Spins cannot be awarded for daily logins or daily check-ins. Lichess Kids is designed to encourage learning and practice. Spins and rewards must only be earned as an accomplishment for winning matches against challenging opponents. Leaving daily spins disabled prevents gamification loop exploitation and focuses the reward feedback loop strictly on active effort.
 
 ### 4. Reverse Proxy & SSL Configuration (Recommended)
 

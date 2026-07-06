@@ -50,18 +50,7 @@ pub struct LichessGame {
     pub created_at: i64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct LichessPuzzle {
-    pub id: String,
-    pub rating: i32,
-}
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct LichessPuzzleRound {
-    pub date: i64,
-    pub win: bool,
-    pub puzzle: LichessPuzzle,
-}
 
 pub async fn fetch_profile(token: &str) -> Result<LichessProfile, reqwest::Error> {
     let client = reqwest::Client::new();
@@ -100,29 +89,7 @@ pub async fn fetch_games(username: &str, token: &str, query: &[(&str, String)]) 
     Ok(games)
 }
 
-pub async fn fetch_puzzle_activity(token: &str, query: &[(&str, String)]) -> Result<Vec<LichessPuzzleRound>, reqwest::Error> {
-    let client = reqwest::Client::new();
-    let response = client
-        .get("https://lichess.org/api/puzzle/activity")
-        .query(query)
-        .bearer_auth(token)
-        .header("User-Agent", "LichessKids-App/1.0")
-        .header("Accept", "application/x-ndjson")
-        .send()
-        .await?;
 
-    let text = response.error_for_status()?.text().await?;
-    let mut rounds = Vec::new();
-    for line in text.lines() {
-        if !line.trim().is_empty() {
-            if let Ok(round) = serde_json::from_str::<LichessPuzzleRound>(line) {
-                rounds.push(round);
-            }
-        }
-    }
-
-    Ok(rounds)
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LichessFollowedUser {
@@ -152,23 +119,7 @@ pub async fn fetch_following(token: &str) -> Result<Vec<String>, reqwest::Error>
     Ok(followed)
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct LichessRatingHistory {
-    pub name: String,
-    pub points: Vec<Vec<i32>>,
-}
 
-pub async fn fetch_rating_history(username: &str) -> Result<Vec<LichessRatingHistory>, reqwest::Error> {
-    let client = reqwest::Client::new();
-    let response = client
-        .get(format!("https://lichess.org/api/user/{}/rating-history", username))
-        .header("User-Agent", "LichessKids-App/1.0")
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-
-    response.error_for_status()?.json::<Vec<LichessRatingHistory>>().await
-}
 
 
 

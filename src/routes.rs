@@ -9,7 +9,6 @@ use axum::{
 };
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use chrono::{TimeZone, Utc, Datelike};
 use base64::Engine;
 use rand::Rng;
 use rusqlite::{params, Connection};
@@ -238,7 +237,6 @@ pub async fn oauth_callback(
 
     let username = lichess_profile.username;
     let game_rating = lichess_profile.perfs.blitz.or(lichess_profile.perfs.rapid).map(|p| p.rating).unwrap_or(1500);
-    let puzzle_rating = lichess_profile.perfs.puzzle.map(|p| p.rating).unwrap_or(1500);
 
     // Save token or check if user exists, using a block to drop the lock before returning
     let (exists, cookie) = {
@@ -259,12 +257,12 @@ pub async fn oauth_callback(
         let cookie = format!("username={}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax", username);
 
         if exists {
-            let _ = db::update_user_ratings(&conn, &username, game_rating, puzzle_rating);
+            let _ = db::update_user_ratings(&conn, &username, game_rating);
         } else {
             // Create user placeholder, ratings will be set on avatar select
             let _ = conn.execute(
-                "INSERT OR IGNORE INTO users (username, avatar_base, current_game_rating, current_puzzle_rating) VALUES (?1, 'cat', ?2, ?3)",
-                params![username, game_rating, puzzle_rating],
+                "INSERT OR IGNORE INTO users (username, avatar_base, current_game_rating) VALUES (?1, 'cat', ?2)",
+                params![username, game_rating],
             );
             let _ = conn.execute("INSERT OR IGNORE INTO equipped (username) VALUES (?1)", params![username]);
         }
@@ -323,6 +321,7 @@ fn process_games_chunk(
     spin_rules: &crate::assets::SpinRules,
     games_eligible: &mut i32,
     games_claimed: &mut i32,
+    spins_earned_from_games: &mut i32,
 ) {
     let conn = db.lock().unwrap();
     for game in games {
@@ -351,119 +350,16 @@ fn process_games_chunk(
             if o_rate >= min_required_rating {
                 *games_eligible += 1;
                 if db::claim_game(&conn, username, &game.id).unwrap_or(false) {
-                    let _ = db::add_spins(&conn, username, 1);
+                    let _ = db::add_spins(&conn, username, 2);
                     *games_claimed += 1;
+                    *spins_earned_from_games += 2;
                 }
             }
         }
     }
 }
 
-fn process_puzzles_chunk_backward(
-    db: &std::sync::Mutex<rusqlite::Connection>,
-    username: &str,
-    puzzles: &[lichess::LichessPuzzleRound],
-    spin_rules: &crate::assets::SpinRules,
-    last_puzzle_sync: i64,
-    current_puzzle_rating: &mut i32,
-    puzzles_eligible: &mut i32,
-    spins_earned_from_puzzles: &mut i32,
-    total_eligible: &mut usize,
-    puzzle_history_days: &std::collections::HashMap<(i32, i32, i32), i32>,
-) {
-    let new_puzzles: Vec<_> = puzzles.iter().filter(|p| p.date > last_puzzle_sync).cloned().collect();
-    if new_puzzles.is_empty() {
-        return;
-    }
 
-    let mut eligible_puzzle_ids = Vec::new();
-    let conn = db.lock().unwrap();
-    
-    let mut running_rating = *current_puzzle_rating;
-    let mut running_rd = 80.0f64;
-    let mut last_day = None;
-
-    for p in &new_puzzles {
-        let datetime = match Utc.timestamp_millis_opt(p.date) {
-            chrono::LocalResult::Single(dt) => dt,
-            _ => Utc.timestamp_opt(0, 0).unwrap(),
-        };
-        let y = datetime.year() as i32;
-        let m = datetime.month0() as i32;
-        let d = datetime.day() as i32;
-        let current_day = (y, m, d);
-
-        // Daily checkpoint reset (going backward)
-        if Some(current_day) != last_day {
-            if last_day.is_some() {
-                if let Some(&official_rating) = puzzle_history_days.get(&current_day) {
-                    running_rating = official_rating;
-                    running_rd = 80.0f64;
-                }
-            }
-            last_day = Some(current_day);
-        }
-
-        let is_rated = puzzle_history_days.contains_key(&current_day);
-
-        let before_play_rating = if is_rated {
-            let q = 0.00575646273;
-            let r_opp = p.puzzle.rating as f64;
-            
-            let e = 1.0 / (1.0 + 10.0f64.powf(-(running_rating as f64 - r_opp) / 400.0));
-            let d2 = 1.0 / (q * q * e * (1.0 - e));
-            
-            let s = if p.win { 1.0 } else { 0.0 };
-            
-            let new_rating = (running_rating as f64) - q * (running_rd * running_rd) * (s - e);
-            let new_rd2 = 1.0 / (1.0 / (running_rd * running_rd) - 1.0 / d2);
-            
-            let new_rd = if new_rd2 > 0.0 {
-                (1.0 / new_rd2).sqrt().max(40.0).min(350.0)
-            } else {
-                350.0
-            };
-            
-            running_rd = new_rd;
-            (new_rating.round() as i32).max(600).min(3500)
-        } else {
-            running_rating
-        };
-
-        let min_required_rating = before_play_rating + spin_rules.puzzle_rating_offset;
-        
-        if is_rated && p.win && p.puzzle.rating >= min_required_rating {
-            *puzzles_eligible += 1;
-            let claimed = conn.query_row(
-                "SELECT COUNT(*) FROM claimed_puzzles WHERE username = ?1 AND puzzle_id = ?2",
-                params![username, p.puzzle.id],
-                |row| row.get::<_, i64>(0)
-            ).unwrap_or(0) > 0;
-            
-            if !claimed {
-                eligible_puzzle_ids.push(p.puzzle.id.clone());
-            }
-        }
-
-        running_rating = before_play_rating;
-    }
-
-    let divisor = std::cmp::max(1, spin_rules.puzzles_per_spin as usize);
-    let total = eligible_puzzle_ids.len();
-    let num_spins = total / divisor;
-
-    for i in 0..num_spins {
-        for j in 0..divisor {
-            let p_id = &eligible_puzzle_ids[i * divisor + j];
-            let _ = db::claim_puzzle(&conn, username, p_id);
-        }
-        let _ = db::add_spins(&conn, username, 1);
-        *spins_earned_from_puzzles += 1;
-    }
-    
-    *total_eligible += total;
-    *current_puzzle_rating = running_rating;
-}
 
 pub struct ChannelStream {
     pub receiver: tokio::sync::mpsc::Receiver<axum::body::Bytes>,
@@ -506,7 +402,7 @@ pub async fn claim_sync(
         }
     };
 
-    let (token, mut puzzle_rating, last_game_sync, last_puzzle_sync) = {
+    let (token, last_game_sync) = {
         let conn = state.db.lock().unwrap();
         let token: Option<String> = conn
             .query_row(
@@ -516,15 +412,11 @@ pub async fn claim_sync(
             )
             .ok();
 
-        let mut p_rate = 1500;
         let mut g_sync = 0;
-        let mut p_sync = 0;
         if let Some(user) = db::get_user(&conn, &username).unwrap() {
-            p_rate = user.current_puzzle_rating;
             g_sync = user.last_game_sync;
-            p_sync = user.last_puzzle_sync;
         }
-        (token, p_rate, g_sync, p_sync)
+        (token, g_sync)
     };
 
     let sync_start_time = std::time::SystemTime::now()
@@ -564,30 +456,14 @@ pub async fn claim_sync(
         let mut profile_created_at = None;
         if let Ok(p) = lichess::fetch_profile(&token).await {
             let g_rate = p.perfs.blitz.or(p.perfs.rapid).map(|x| x.rating).unwrap_or(1500);
-            let p_rate = p.perfs.puzzle.map(|x| x.rating).unwrap_or(1500);
             let conn = state.db.lock().unwrap();
-            let _ = db::update_user_ratings(&conn, &username, g_rate, p_rate);
-            puzzle_rating = p_rate;
+            let _ = db::update_user_ratings(&conn, &username, g_rate);
             profile_created_at = p.created_at;
-        }
-
-        let mut puzzle_history_days = std::collections::HashMap::new();
-        if let Ok(history) = lichess::fetch_rating_history(&username).await {
-            if let Some(p_hist) = history.into_iter().find(|h| h.name == "Puzzles") {
-                for pt in p_hist.points {
-                    if pt.len() >= 4 {
-                        let y = pt[0];
-                        let m = pt[1]; // 0-indexed month
-                        let d = pt[2];
-                        let rating = pt[3];
-                        puzzle_history_days.insert((y, m, d), rating);
-                    }
-                }
-            }
         }
 
         let mut games_eligible = 0;
         let mut games_claimed = 0;
+        let mut spins_earned_from_games = 0;
 
         let mut game_sync_fully_succeeded = true;
         let start_game_time = if last_game_sync == 0 {
@@ -628,6 +504,7 @@ pub async fn claim_sync(
                         &state.assets.spin_rules,
                         &mut games_eligible,
                         &mut games_claimed,
+                        &mut spins_earned_from_games,
                     );
 
                     let oldest_game_date = chunk_games.last().unwrap().created_at;
@@ -635,10 +512,10 @@ pub async fn claim_sync(
 
                     let percent = if total_game_dist > 0 {
                         let processed_dist = sync_start_time - current_game_before;
-                        let p = (processed_dist as f64 / total_game_dist as f64) * 50.0;
-                        if p > 50.0 { 50.0 } else { p }
+                        let p = (processed_dist as f64 / total_game_dist as f64) * 100.0;
+                        if p > 100.0 { 100.0 } else { p }
                     } else {
-                        50.0
+                        100.0
                     };
 
                     send_update!(serde_json::json!({
@@ -666,106 +543,7 @@ pub async fn claim_sync(
 
         if game_sync_fully_succeeded {
             let conn = state.db.lock().unwrap();
-            let current_p_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_puzzle_sync).unwrap_or(0);
-            let _ = db::update_sync_timestamps(&conn, &username, sync_start_time, current_p_sync);
-        }
-
-        let mut mut_puzzle_rating = puzzle_rating;
-        let mut puzzles_eligible = 0;
-        let mut spins_earned_from_puzzles = 0;
-        let mut total_eligible = 0;
-        let mut total_puzzles_processed = 0;
-        let mut puzzle_sync_fully_succeeded = true;
-
-        let mut current_puzzle_before = sync_start_time;
-        let mut puzzle_chunk_limit = 100;
-
-        while current_puzzle_before > last_puzzle_sync {
-            let mut query = vec![("max", puzzle_chunk_limit.to_string())];
-            if current_puzzle_before < sync_start_time {
-                query.push(("before", current_puzzle_before.to_string()));
-            }
-
-            match lichess::fetch_puzzle_activity(&token, &query).await {
-                Ok(chunk_puzzles) => {
-                    if chunk_puzzles.is_empty() {
-                        {
-                            let conn = state.db.lock().unwrap();
-                            let current_g_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_game_sync).unwrap_or(0);
-                            let _ = db::update_sync_timestamps(&conn, &username, current_g_sync, sync_start_time);
-                        }
-                        break;
-                    }
-
-                    let new_puzzles: Vec<_> = chunk_puzzles.iter().filter(|p| p.date > last_puzzle_sync).cloned().collect();
-                    if new_puzzles.is_empty() {
-                        {
-                            let conn = state.db.lock().unwrap();
-                            let current_g_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_game_sync).unwrap_or(0);
-                            let _ = db::update_sync_timestamps(&conn, &username, current_g_sync, sync_start_time);
-                        }
-                        break;
-                    }
-
-                    process_puzzles_chunk_backward(
-                        &state.db,
-                        &username,
-                        &new_puzzles,
-                        &state.assets.spin_rules,
-                        last_puzzle_sync,
-                        &mut mut_puzzle_rating,
-                        &mut puzzles_eligible,
-                        &mut spins_earned_from_puzzles,
-                        &mut total_eligible,
-                        &puzzle_history_days,
-                    );
-
-                    total_puzzles_processed += new_puzzles.len();
-
-                    let oldest_date = chunk_puzzles.last().unwrap().date;
-                    current_puzzle_before = oldest_date;
-
-                    let total_puzzle_dist = sync_start_time - last_puzzle_sync;
-                    let percent = if total_puzzle_dist > 0 {
-                        let processed_dist = sync_start_time - current_puzzle_before;
-                        let p = 50.0 + (processed_dist as f64 / total_puzzle_dist as f64) * 50.0;
-                        if p > 100.0 { 100.0 } else { p }
-                    } else {
-                        100.0
-                    };
-
-                    send_update!(serde_json::json!({
-                        "type": "progress",
-                        "percent": percent,
-                        "last_puzzle_sync": current_puzzle_before
-                    }));
-
-                    let loaded_count = new_puzzles.len();
-                    if loaded_count >= puzzle_chunk_limit {
-                        puzzle_chunk_limit = std::cmp::min(puzzle_chunk_limit * 2, 1000);
-                    } else if loaded_count < puzzle_chunk_limit / 2 {
-                        puzzle_chunk_limit = std::cmp::max(100, puzzle_chunk_limit / 2);
-                    }
-                }
-                Err(_) => {
-                    if puzzle_chunk_limit <= 10 {
-                        puzzle_sync_fully_succeeded = false;
-                        break;
-                    }
-                    puzzle_chunk_limit = puzzle_chunk_limit / 2;
-                }
-            }
-        }
-
-        if puzzle_sync_fully_succeeded {
-            let conn = state.db.lock().unwrap();
-            let current_g_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_game_sync).unwrap_or(0);
-            let _ = db::update_sync_timestamps(&conn, &username, current_g_sync, sync_start_time);
-        }
-
-        let all_chunks_succeeded = game_sync_fully_succeeded && puzzle_sync_fully_succeeded;
-        if all_chunks_succeeded {
-            let conn = state.db.lock().unwrap();
+            let _ = db::update_sync_timestamps(&conn, &username, sync_start_time);
             let _ = db::update_last_synced_at(&conn, &username, sync_start_time);
         }
 
@@ -774,23 +552,16 @@ pub async fn claim_sync(
             db::get_user(&conn, &username).unwrap().unwrap()
         };
 
-        let divisor = std::cmp::max(1, state.assets.spin_rules.puzzles_per_spin as usize);
         send_update!(serde_json::json!({
             "type": "done",
-            "success": all_chunks_succeeded,
-            "error": if all_chunks_succeeded { serde_json::Value::Null } else { serde_json::Value::String("Sync completed partially because some periods failed to load.".to_string()) },
-            "games_sync_spins": games_claimed,
-            "puzzles_sync_spins": spins_earned_from_puzzles,
+            "success": game_sync_fully_succeeded,
+            "error": if game_sync_fully_succeeded { serde_json::Value::Null } else { serde_json::Value::String("Sync completed partially because some periods failed to load.".to_string()) },
+            "games_sync_spins": spins_earned_from_games,
             "daily_spin_claimed": false,
-            "puzzles_processed": total_puzzles_processed,
-            "eligible_unclaimed_puzzles": total_eligible % divisor,
-            "puzzles_per_spin": divisor,
             "spins_available": updated_user.spins_available,
             "coins": updated_user.coins,
             "games_eligible": games_eligible,
-            "puzzles_eligible": puzzles_eligible,
             "last_game_sync": updated_user.last_game_sync,
-            "last_puzzle_sync": updated_user.last_puzzle_sync,
             "last_synced_at": sync_start_time
         }));
     });
@@ -868,7 +639,7 @@ pub async fn spin_wheel(
         Ok(false) => {
             Err((
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "No spins available! Sync your Lichess games or puzzles to earn spins." })),
+                Json(serde_json::json!({ "error": "No spins available! Sync your Lichess games to earn spins." })),
             ))
         }
         Err(e) => {
@@ -991,7 +762,6 @@ pub struct FriendProfile {
     pub username: String,
     pub avatar_base: String,
     pub current_game_rating: i32,
-    pub current_puzzle_rating: i32,
     pub equipped: EquippedItems,
     pub lichess_url: String,
 }
@@ -1028,18 +798,17 @@ pub async fn get_friends(
         let local_user = {
             let conn = state.db.lock().unwrap();
             conn.query_row(
-                "SELECT username, avatar_base, current_game_rating, current_puzzle_rating FROM users WHERE LOWER(username) = LOWER(?1)",
+                "SELECT username, avatar_base, current_game_rating FROM users WHERE LOWER(username) = LOWER(?1)",
                 params![f_name],
                 |row| Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, i32>(2)?,
-                    row.get::<_, i32>(3)?
                 ))
             ).ok()
         };
 
-        if let Some((stored_username, avatar_base, g_rating, p_rating)) = local_user {
+        if let Some((stored_username, avatar_base, g_rating)) = local_user {
             let equipped = {
                 let conn = state.db.lock().unwrap();
                 db::get_equipped(&conn, &stored_username).unwrap_or_default()
@@ -1048,7 +817,6 @@ pub async fn get_friends(
                 username: stored_username.clone(),
                 avatar_base,
                 current_game_rating: g_rating,
-                current_puzzle_rating: p_rating,
                 equipped,
                 lichess_url: format!("https://lichess.org/@/{}", stored_username),
             });
@@ -1148,12 +916,10 @@ pub async fn get_user_profile_html(
         <h2>{username}</h2>
         <p style="color: var(--text-secondary);">Lichess Kids Profile</p>
         <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 4px;">
-            Game Rating: <span style="font-weight:700;color:var(--knight-color);">{game_rating}</span> |
-            Puzzles: <span style="font-weight:700;color:var(--bishop-color);">{puzzle_rating}</span>
+            Game Rating: <span style="font-weight:700;color:var(--knight-color);">{game_rating}</span>
         </p>
         <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
-            Games Won: <span style="font-weight:700;color:var(--success);">{total_games_won}</span> | 
-            Puzzles Solved: <span style="font-weight:700;color:var(--success);">{total_puzzles_solved}</span>
+            Games Won: <span style="font-weight:700;color:var(--success);">{total_games_won}</span>
         </p>
         <a href="https://lichess.org/@/{username}" target="_blank" class="btn btn-secondary" style="width: 100%;">View on Lichess</a>
     </div>
@@ -1186,9 +952,7 @@ pub async fn get_user_profile_html(
         avatar_base = user_profile.avatar_base,
         avatar_svg_url = avatar_svg_url,
         game_rating = user_profile.current_game_rating,
-        puzzle_rating = user_profile.current_puzzle_rating,
         total_games_won = user_profile.total_games_claimed,
-        total_puzzles_solved = user_profile.total_puzzles_claimed,
         top = equipped.top.as_deref().unwrap_or(""),
         bottom = equipped.bottom.as_deref().unwrap_or(""),
         hat = equipped.hat.as_deref().unwrap_or(""),

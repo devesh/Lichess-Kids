@@ -6,16 +6,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SpinRules {
     pub game_rating_offset: i32,
-    pub puzzle_rating_offset: i32,
-    pub puzzles_per_spin: i32,
 }
 
 impl Default for SpinRules {
     fn default() -> Self {
         SpinRules {
             game_rating_offset: -100,
-            puzzle_rating_offset: -100,
-            puzzles_per_spin: 25,
         }
     }
 }

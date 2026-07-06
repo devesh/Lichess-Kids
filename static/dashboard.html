@@ -80,12 +80,10 @@
                 <div style="text-align: center;">
                     <h2 id="profile-name" style="margin-bottom: 2px;">Player</h2>
                     <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 4px;">
-                        Game Rating: <span id="game-rating" style="font-weight:700;color:var(--knight-color);">1500</span> | 
-                        Puzzles: <span id="puzzle-rating" style="font-weight:700;color:var(--bishop-color);">1500</span>
+                        Game Rating: <span id="game-rating" style="font-weight:700;color:var(--knight-color);">1500</span>
                     </p>
                     <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
-                        Games Won: <span id="total-games-won" style="font-weight:700;color:var(--success);">0</span> | 
-                        Puzzles Solved: <span id="total-puzzles-solved" style="font-weight:700;color:var(--success);">0</span>
+                        Games Won: <span id="total-games-won" style="font-weight:700;color:var(--success);">0</span>
                     </p>
                 </div>
 
@@ -102,11 +100,10 @@
             <div class="glass-panel">
                 <h2>Sync Achievements</h2>
                 <p style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.5; margin-bottom: 15px;">
-                    Fetch your latest Lichess games and puzzles!
+                    Fetch your latest Lichess games!
                 </p>
                 <div style="font-size: 0.82rem; color: var(--text-secondary); background: rgba(0,0,0,0.2); padding: 10px; border-radius: 10px; margin-bottom: 15px; border: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 6px;">
                     <div>Latest Synced Game: <span id="latest-game-sync" style="font-weight: 700; color: var(--text-primary);">Never</span></div>
-                    <div>Latest Synced Puzzle: <span id="latest-puzzle-sync" style="font-weight: 700; color: var(--text-primary);">Never</span></div>
                 </div>
                 <button id="sync-btn" class="btn btn-primary" style="width: 100%;">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
@@ -155,11 +152,10 @@
                     <div style="width: 100%; border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 8px; font-size: 0.8rem; line-height: 1.4; color: var(--text-secondary);">
                         <strong style="color: var(--text-primary); font-size: 0.85rem; display: block; margin-bottom: 6px;">How to Get More Spins:</strong>
                         <ul style="padding-left: 16px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px;">
-                            <li>Beat a Lichess opponent rated &ge; (your ELO - 100)</li>
-                            <li>Solve 25 correct Lichess puzzles rated &ge; (your puzzle rating - 100)</li>
+                            <li>Win a rated game against a Lichess opponent rated &ge; (your ELO - 100) (+2 spins)</li>
                         </ul>
                         <span style="font-style: italic; font-size: 0.75rem; color: var(--knight-color);">
-                            Tip: If the sync timestamps in the sidebar are old, click "Sync Lichess Stats" to load your latest games and puzzles.
+                            Tip: If the sync timestamps in the sidebar are old, click "Sync Lichess Stats" to load your latest games.
                         </span>
                     </div>
                 </div>
@@ -363,27 +359,16 @@
 
                 // Update ratings and total counts
                 document.getElementById('game-rating').innerText = userProfile.current_game_rating;
-                document.getElementById('puzzle-rating').innerText = userProfile.current_puzzle_rating;
                 document.getElementById('total-games-won').innerText = userProfile.total_games_claimed;
-                document.getElementById('total-puzzles-solved').innerText = userProfile.total_puzzles_claimed;
 
-                // Update Game and Puzzle Sync timestamps
+                // Update Game Sync timestamps
                 const gameSyncEl = document.getElementById('latest-game-sync');
-                const puzzleSyncEl = document.getElementById('latest-puzzle-sync');
                 if (gameSyncEl) {
                     if (userProfile.last_game_sync > 0) {
                         const d = new Date(userProfile.last_game_sync);
                         gameSyncEl.innerText = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                     } else {
                         gameSyncEl.innerText = "Never";
-                    }
-                }
-                if (puzzleSyncEl) {
-                    if (userProfile.last_puzzle_sync > 0) {
-                        const d = new Date(userProfile.last_puzzle_sync);
-                        puzzleSyncEl.innerText = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                    } else {
-                        puzzleSyncEl.innerText = "Never";
                     }
                 }
 
@@ -711,13 +696,6 @@
                                         gameSyncEl.innerText = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                                     }
                                 }
-                                if (data.last_puzzle_sync) {
-                                    const puzzleSyncEl = document.getElementById('latest-puzzle-sync');
-                                    if (puzzleSyncEl) {
-                                        const d = new Date(data.last_puzzle_sync);
-                                        puzzleSyncEl.innerText = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                                    }
-                                }
                             } else if (data.type === 'done') {
                                 progressBar.style.width = '100%';
                                 setTimeout(() => {
@@ -725,9 +703,9 @@
                                 }, 300);
 
                                 if (data.success) {
-                                    let totalSpins = data.games_sync_spins + data.puzzles_sync_spins;
+                                    let totalSpins = data.games_sync_spins;
                                     syncStatus.style.color = 'var(--success)';
-                                    syncStatus.innerText = `Sync Complete! Earned ${totalSpins} spins. Found ${data.games_eligible} games won & ${data.puzzles_eligible} puzzles solved meeting criteria.`;
+                                    syncStatus.innerText = `Sync Complete! Earned ${totalSpins} spins. Found ${data.games_eligible} games won meeting criteria.`;
                                     // Reload profile to update spins balance and ratings
                                     loadProfile();
                                 } else {
@@ -776,7 +754,7 @@
                             <div class="friend-mini-avatar" id="svg-friend-${friend.username}"></div>
                             <div class="friend-meta">
                                 <h3>${friend.username}</h3>
-                                <p>Game: ${friend.current_game_rating} | Puzzles: ${friend.current_puzzle_rating}</p>
+                                <p>Game Rating: ${friend.current_game_rating}</p>
                             </div>
                         </div>
                         <div style="display:flex; gap:10px; align-items:center;">

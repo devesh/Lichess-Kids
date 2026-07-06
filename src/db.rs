@@ -8,13 +8,10 @@ pub struct UserProfile {
     pub coins: i32,
     pub spins_available: i32,
     pub current_game_rating: i32,
-    pub current_puzzle_rating: i32,
     pub last_daily_spin_claim: String,
     pub last_synced_at: i64,
     pub last_game_sync: i64,
-    pub last_puzzle_sync: i64,
     pub total_games_claimed: i32,
-    pub total_puzzles_claimed: i32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -41,10 +38,8 @@ pub fn init_db(db_path: &str) -> Result<Connection> {
             coins INTEGER NOT NULL DEFAULT 0,
             spins_available INTEGER NOT NULL DEFAULT 0,
             current_game_rating INTEGER NOT NULL DEFAULT 1500,
-            current_puzzle_rating INTEGER NOT NULL DEFAULT 1500,
             last_synced_at INTEGER NOT NULL DEFAULT 0,
-            last_game_sync INTEGER NOT NULL DEFAULT 0,
-            last_puzzle_sync INTEGER NOT NULL DEFAULT 0
+            last_game_sync INTEGER NOT NULL DEFAULT 0
         );",
         [],
     )?;
@@ -55,17 +50,6 @@ pub fn init_db(db_path: &str) -> Result<Connection> {
             username TEXT,
             game_id TEXT,
             PRIMARY KEY (username, game_id),
-            FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
-        );",
-        [],
-    )?;
-
-    // Create claimed puzzles table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS claimed_puzzles (
-            username TEXT,
-            puzzle_id TEXT,
-            PRIMARY KEY (username, puzzle_id),
             FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
         );",
         [],
@@ -114,9 +98,8 @@ pub fn init_db(db_path: &str) -> Result<Connection> {
     // Migration: Add last_synced_at column to users if it doesn't exist
     let _ = conn.execute("ALTER TABLE users ADD COLUMN last_synced_at INTEGER DEFAULT 0;", []);
 
-    // Migration: Add last_game_sync and last_puzzle_sync columns to users if they don't exist
+    // Migration: Add last_game_sync column to users if it doesn't exist
     let _ = conn.execute("ALTER TABLE users ADD COLUMN last_game_sync INTEGER DEFAULT 0;", []);
-    let _ = conn.execute("ALTER TABLE users ADD COLUMN last_puzzle_sync INTEGER DEFAULT 0;", []);
 
     Ok(conn)
 }
@@ -137,7 +120,7 @@ pub fn create_user(conn: &Connection, username: &str, avatar_base: &str) -> Resu
 
 pub fn get_user(conn: &Connection, username: &str) -> Result<Option<UserProfile>> {
     let mut stmt = conn.prepare(
-        "SELECT username, avatar_base, coins, spins_available, current_game_rating, current_puzzle_rating, last_daily_spin_claim, last_synced_at, last_game_sync, last_puzzle_sync 
+        "SELECT username, avatar_base, coins, spins_available, current_game_rating, last_daily_spin_claim, last_synced_at, last_game_sync 
          FROM users WHERE username = ?1"
     )?;
 
@@ -149,25 +132,16 @@ pub fn get_user(conn: &Connection, username: &str) -> Result<Option<UserProfile>
             |row| row.get(0)
         ).unwrap_or(0);
 
-        let total_puzzles_claimed: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM claimed_puzzles WHERE username = ?1",
-            params![username],
-            |row| row.get(0)
-        ).unwrap_or(0);
-
         Ok(Some(UserProfile {
             username: row.get(0)?,
             avatar_base: row.get(1)?,
             coins: row.get(2)?,
             spins_available: row.get(3)?,
             current_game_rating: row.get(4)?,
-            current_puzzle_rating: row.get(5)?,
-            last_daily_spin_claim: row.get(6).unwrap_or_default(),
-            last_synced_at: row.get(7).unwrap_or(0),
-            last_game_sync: row.get(8).unwrap_or(0),
-            last_puzzle_sync: row.get(9).unwrap_or(0),
+            last_daily_spin_claim: row.get(5).unwrap_or_default(),
+            last_synced_at: row.get(6).unwrap_or(0),
+            last_game_sync: row.get(7).unwrap_or(0),
             total_games_claimed,
-            total_puzzles_claimed,
         }))
     } else {
         Ok(None)
@@ -182,10 +156,10 @@ pub fn update_last_daily_spin_claim(conn: &Connection, username: &str, claim_dat
     Ok(())
 }
 
-pub fn update_user_ratings(conn: &Connection, username: &str, game_rating: i32, puzzle_rating: i32) -> Result<()> {
+pub fn update_user_ratings(conn: &Connection, username: &str, game_rating: i32) -> Result<()> {
     conn.execute(
-        "UPDATE users SET current_game_rating = ?2, current_puzzle_rating = ?3 WHERE username = ?1",
-        params![username, game_rating, puzzle_rating],
+        "UPDATE users SET current_game_rating = ?2 WHERE username = ?1",
+        params![username, game_rating],
     )?;
     Ok(())
 }
@@ -240,13 +214,7 @@ pub fn claim_game(conn: &Connection, username: &str, game_id: &str) -> Result<bo
     Ok(rows_affected > 0)
 }
 
-pub fn claim_puzzle(conn: &Connection, username: &str, puzzle_id: &str) -> Result<bool> {
-    let rows_affected = conn.execute(
-        "INSERT OR IGNORE INTO claimed_puzzles (username, puzzle_id) VALUES (?1, ?2)",
-        params![username, puzzle_id],
-    )?;
-    Ok(rows_affected > 0)
-}
+
 
 pub fn buy_item(conn: &Connection, username: &str, item_id: &str, cost: i32) -> Result<Result<i32, String>> {
     // Check if user already owns it
@@ -365,10 +333,10 @@ pub fn update_last_synced_at(conn: &Connection, username: &str, last_synced_at: 
     Ok(())
 }
 
-pub fn update_sync_timestamps(conn: &Connection, username: &str, last_game_sync: i64, last_puzzle_sync: i64) -> Result<()> {
+pub fn update_sync_timestamps(conn: &Connection, username: &str, last_game_sync: i64) -> Result<()> {
     conn.execute(
-        "UPDATE users SET last_game_sync = ?2, last_puzzle_sync = ?3 WHERE username = ?1",
-        params![username, last_game_sync, last_puzzle_sync],
+        "UPDATE users SET last_game_sync = ?2 WHERE username = ?1",
+        params![username, last_game_sync],
     )?;
     Ok(())
 }
