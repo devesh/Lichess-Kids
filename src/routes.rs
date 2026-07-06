@@ -512,7 +512,12 @@ pub async fn claim_sync(
                 }
 
                 current_game_since = current_game_until;
-                game_chunk_duration = 90 * 24 * 60 * 60 * 1000;
+                
+                if chunk_games.len() < 5 {
+                    game_chunk_duration = std::cmp::min(game_chunk_duration * 2, 3 * 365 * 24 * 60 * 60 * 1000);
+                } else {
+                    game_chunk_duration = 90 * 24 * 60 * 60 * 1000;
+                }
             }
             Err(_) => {
                 if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
@@ -565,7 +570,12 @@ pub async fn claim_sync(
                 }
 
                 current_puzzle_since = current_puzzle_before;
-                puzzle_chunk_duration = 90 * 24 * 60 * 60 * 1000;
+                
+                if chunk_puzzles.len() < 5 {
+                    puzzle_chunk_duration = std::cmp::min(puzzle_chunk_duration * 2, 3 * 365 * 24 * 60 * 60 * 1000);
+                } else {
+                    puzzle_chunk_duration = 90 * 24 * 60 * 60 * 1000;
+                }
             }
             Err(_) => {
                 if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
