@@ -158,7 +158,7 @@ pub async fn oauth_start(
     let code_challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash);
 
     let auth_url = format!(
-        "https://lichess.org/oauth?response_type=code&client_id={}&redirect_uri={}&scope=puzzle:read&state={}&code_challenge={}&code_challenge_method=S256",
+        "https://lichess.org/oauth?response_type=code&client_id={}&redirect_uri={}&scope=follow:read&state={}&code_challenge={}&code_challenge_method=S256",
         state.lichess_client_id,
         urlencoding::encode(&redirect_uri),
         state_val,
