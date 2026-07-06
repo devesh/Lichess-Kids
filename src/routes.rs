@@ -310,6 +310,123 @@ pub async fn select_avatar(
 // CLUES & SYNC GAME/PUZZLE ACHIEVEMENTS
 // -------------------------------------------------------------
 
+fn process_games_chunk(
+    db: &std::sync::Mutex<rusqlite::Connection>,
+    username: &str,
+    games: &[lichess::LichessGame],
+    spin_rules: &crate::assets::SpinRules,
+    games_eligible: &mut i32,
+    games_claimed: &mut i32,
+) {
+    let conn = db.lock().unwrap();
+    for game in games {
+        if !game.rated {
+            continue;
+        }
+
+        let user_won = match game.winner.as_deref() {
+            Some("white") => game.players.white.user.as_ref().map(|u| u.id == username.to_lowercase()).unwrap_or(false),
+            Some("black") => game.players.black.user.as_ref().map(|u| u.id == username.to_lowercase()).unwrap_or(false),
+            _ => false,
+        };
+
+        if !user_won {
+            continue;
+        }
+
+        let (user_game_rating, opp_game_rating) = if game.players.white.user.as_ref().map(|u| u.id == username.to_lowercase()).unwrap_or(false) {
+            (game.players.white.rating, game.players.black.rating)
+        } else {
+            (game.players.black.rating, game.players.white.rating)
+        };
+
+        if let (Some(u_rate), Some(o_rate)) = (user_game_rating, opp_game_rating) {
+            let min_required_rating = u_rate + spin_rules.game_rating_offset;
+            if o_rate >= min_required_rating {
+                *games_eligible += 1;
+                if db::claim_game(&conn, username, &game.id).unwrap_or(false) {
+                    let _ = db::add_spins(&conn, username, 1);
+                    *games_claimed += 1;
+                }
+            }
+        }
+    }
+}
+
+fn process_puzzles_chunk(
+    db: &std::sync::Mutex<rusqlite::Connection>,
+    username: &str,
+    puzzles: &[lichess::LichessPuzzleRound],
+    spin_rules: &crate::assets::SpinRules,
+    last_puzzle_sync: i64,
+    puzzle_rating: &mut i32,
+    puzzles_eligible: &mut i32,
+    spins_earned_from_puzzles: &mut i32,
+    total_eligible: &mut usize,
+) {
+    let new_puzzles: Vec<_> = puzzles.iter().filter(|p| p.date > last_puzzle_sync).cloned().collect();
+    if new_puzzles.is_empty() {
+        return;
+    }
+
+    let mut puzzles_chronological = new_puzzles.clone();
+    puzzles_chronological.sort_by_key(|p| p.date);
+
+    let mut wins = 0;
+    let mut losses = 0;
+    for p in &puzzles_chronological {
+        if p.win {
+            wins += 1;
+        } else {
+            losses += 1;
+        }
+    }
+
+    let mut sim_rating = std::cmp::max(600, *puzzle_rating - (wins * 10 - losses * 10));
+    let mut eligible_puzzle_ids = Vec::new();
+    let conn = db.lock().unwrap();
+
+    for p in puzzles_chronological {
+        let before_play_rating = sim_rating;
+        let min_required_rating = before_play_rating + spin_rules.puzzle_rating_offset;
+        
+        if p.win && p.puzzle.rating >= min_required_rating {
+            *puzzles_eligible += 1;
+            let claimed = conn.query_row(
+                "SELECT COUNT(*) FROM claimed_puzzles WHERE username = ?1 AND puzzle_id = ?2",
+                params![username, p.puzzle.id],
+                |row| row.get::<_, i64>(0)
+            ).unwrap_or(0) > 0;
+            
+            if !claimed {
+                eligible_puzzle_ids.push(p.puzzle.id.clone());
+            }
+        }
+
+        if p.win {
+            sim_rating += 10;
+        } else {
+            sim_rating -= 10;
+        }
+    }
+
+    let divisor = std::cmp::max(1, spin_rules.puzzles_per_spin as usize);
+    let total = eligible_puzzle_ids.len();
+    let num_spins = total / divisor;
+
+    for i in 0..num_spins {
+        for j in 0..divisor {
+            let p_id = &eligible_puzzle_ids[i * divisor + j];
+            let _ = db::claim_puzzle(&conn, username, p_id);
+        }
+        let _ = db::add_spins(&conn, username, 1);
+        *spins_earned_from_puzzles += 1;
+    }
+    
+    *total_eligible += total;
+    *puzzle_rating = sim_rating;
+}
+
 #[axum::debug_handler]
 pub async fn claim_sync(
     State(state): State<AppState>,
@@ -362,164 +479,105 @@ pub async fn claim_sync(
         profile_created_at = p.created_at;
     }
 
-    let chunk_size = 90 * 24 * 60 * 60 * 1000; // 90 days in ms
-
-    // 2. Fetch games in chunks since last_game_sync (or profile_created_at if initial sync)
-    let start_game_time = last_game_sync;
-    let mut current_game_since = if start_game_time == 0 {
-        profile_created_at.unwrap_or(sync_start_time - 30 * 24 * 60 * 60 * 1000)
-    } else {
-        start_game_time
-    };
-
-    let mut games = Vec::new();
-    while current_game_since < sync_start_time {
-        let current_game_until = std::cmp::min(current_game_since + chunk_size, sync_start_time);
-        if let Ok(chunk_games) = lichess::fetch_games(&username, &token, Some(current_game_since), Some(current_game_until)).await {
-            games.extend(chunk_games);
-        } else {
-            // Break early on chunk fetch error
-            break;
-        }
-        current_game_since = current_game_until;
-    }
-
     let mut games_eligible = 0;
     let mut games_claimed = 0;
-    {
-        let conn = state.db.lock().unwrap();
-        for game in &games {
-            if !game.rated {
-                continue;
-            }
 
-            let user_won = match game.winner.as_deref() {
-                Some("white") => game.players.white.user.as_ref().map(|u| u.id == username.to_lowercase()).unwrap_or(false),
-                Some("black") => game.players.black.user.as_ref().map(|u| u.id == username.to_lowercase()).unwrap_or(false),
-                _ => false,
-            };
-
-            if !user_won {
-                continue;
-            }
-
-            let (user_game_rating, opp_game_rating) = if game.players.white.user.as_ref().map(|u| u.id == username.to_lowercase()).unwrap_or(false) {
-                (game.players.white.rating, game.players.black.rating)
-            } else {
-                (game.players.black.rating, game.players.white.rating)
-            };
-
-            if let (Some(u_rate), Some(o_rate)) = (user_game_rating, opp_game_rating) {
-                let min_required_rating = u_rate + state.assets.spin_rules.game_rating_offset;
-                if o_rate >= min_required_rating {
-                    games_eligible += 1;
-                    if db::claim_game(&conn, &username, &game.id).unwrap_or(false) {
-                        let _ = db::add_spins(&conn, &username, 1);
-                        games_claimed += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    // 3. Fetch puzzles in chunks since last_puzzle_sync (or profile_created_at if initial sync)
-    let start_puzzle_time = last_puzzle_sync;
-    let mut current_puzzle_since = if start_puzzle_time == 0 {
+    let mut current_game_since = if last_game_sync == 0 {
         profile_created_at.unwrap_or(sync_start_time - 30 * 24 * 60 * 60 * 1000)
     } else {
-        start_puzzle_time
+        last_game_sync
     };
 
-    let mut puzzles = Vec::new();
-    while current_puzzle_since < sync_start_time {
-        let current_puzzle_before = std::cmp::min(current_puzzle_since + chunk_size, sync_start_time);
-        if let Ok(chunk_puzzles) = lichess::fetch_puzzle_activity(&token, Some(current_puzzle_since), Some(current_puzzle_before)).await {
-            puzzles.extend(chunk_puzzles);
-        } else {
-            // Break early on chunk fetch error
-            break;
-        }
-        current_puzzle_since = current_puzzle_before;
-    }
+    let mut game_chunk_duration = 90 * 24 * 60 * 60 * 1000; // 90 days in ms
 
-    let mut new_last_game_sync = last_game_sync;
-    for g in &games {
-        if g.created_at > new_last_game_sync {
-            new_last_game_sync = g.created_at;
-        }
-    }
+    while current_game_since < sync_start_time {
+        let current_game_until = std::cmp::min(current_game_since + game_chunk_duration, sync_start_time);
+        let actual_duration = current_game_until - current_game_since;
 
-    let mut new_last_puzzle_sync = last_puzzle_sync;
-    for p in &puzzles {
-        if p.date > new_last_puzzle_sync {
-            new_last_puzzle_sync = p.date;
-        }
-    }
+        match lichess::fetch_games(&username, &token, Some(current_game_since), Some(current_game_until)).await {
+            Ok(chunk_games) => {
+                process_games_chunk(
+                    &state.db,
+                    &username,
+                    &chunk_games,
+                    &state.assets.spin_rules,
+                    &mut games_eligible,
+                    &mut games_claimed,
+                );
 
-    let new_puzzles: Vec<_> = puzzles.into_iter().filter(|p| p.date > last_puzzle_sync).collect();
-
-    let mut puzzles_eligible = 0;
-    let (spins_earned_from_puzzles, total_eligible) = {
-        let conn = state.db.lock().unwrap();
-        let mut puzzles_chronological = new_puzzles.clone();
-        puzzles_chronological.sort_by_key(|p| p.date);
-
-        let mut wins = 0;
-        let mut losses = 0;
-        for p in &puzzles_chronological {
-            if p.win {
-                wins += 1;
-            } else {
-                losses += 1;
-            }
-        }
-
-        let mut sim_rating = std::cmp::max(600, puzzle_rating - (wins * 10 - losses * 10));
-        let mut eligible_puzzle_ids = Vec::new();
-
-        for p in puzzles_chronological {
-            let before_play_rating = sim_rating;
-            let min_required_rating = before_play_rating + state.assets.spin_rules.puzzle_rating_offset;
-            
-            if p.win && p.puzzle.rating >= min_required_rating {
-                puzzles_eligible += 1;
-                let claimed = conn.query_row(
-                    "SELECT COUNT(*) FROM claimed_puzzles WHERE username = ?1 AND puzzle_id = ?2",
-                    params![username, p.puzzle.id],
-                    |row| row.get::<_, i64>(0)
-                ).unwrap_or(0) > 0;
-                
-                if !claimed {
-                    eligible_puzzle_ids.push(p.puzzle.id.clone());
+                {
+                    let conn = state.db.lock().unwrap();
+                    let current_p_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_puzzle_sync).unwrap_or(0);
+                    let _ = db::update_sync_timestamps(&conn, &username, current_game_until, current_p_sync);
                 }
-            }
 
-            if p.win {
-                sim_rating += 10;
-            } else {
-                sim_rating -= 10;
+                current_game_since = current_game_until;
+                game_chunk_duration = 90 * 24 * 60 * 60 * 1000;
+            }
+            Err(_) => {
+                if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
+                    break;
+                }
+                game_chunk_duration = actual_duration / 2;
             }
         }
+    }
 
-        let divisor = std::cmp::max(1, state.assets.spin_rules.puzzles_per_spin as usize);
-        let total = eligible_puzzle_ids.len();
-        let num_spins = total / divisor;
-        let mut spins = 0;
+    let mut mut_puzzle_rating = puzzle_rating;
+    let mut puzzles_eligible = 0;
+    let mut spins_earned_from_puzzles = 0;
+    let mut total_eligible = 0;
+    let mut total_puzzles_processed = 0;
 
-        for i in 0..num_spins {
-            for j in 0..divisor {
-                let p_id = &eligible_puzzle_ids[i * divisor + j];
-                let _ = db::claim_puzzle(&conn, &username, p_id);
-            }
-            let _ = db::add_spins(&conn, &username, 1);
-            spins += 1;
-        }
-        (spins, total)
+    let mut current_puzzle_since = if last_puzzle_sync == 0 {
+        profile_created_at.unwrap_or(sync_start_time - 30 * 24 * 60 * 60 * 1000)
+    } else {
+        last_puzzle_sync
     };
+
+    let mut puzzle_chunk_duration = 90 * 24 * 60 * 60 * 1000; // 90 days in ms
+
+    while current_puzzle_since < sync_start_time {
+        let current_puzzle_before = std::cmp::min(current_puzzle_since + puzzle_chunk_duration, sync_start_time);
+        let actual_duration = current_puzzle_before - current_puzzle_since;
+
+        match lichess::fetch_puzzle_activity(&token, Some(current_puzzle_since), Some(current_puzzle_before)).await {
+            Ok(chunk_puzzles) => {
+                process_puzzles_chunk(
+                    &state.db,
+                    &username,
+                    &chunk_puzzles,
+                    &state.assets.spin_rules,
+                    current_puzzle_since,
+                    &mut mut_puzzle_rating,
+                    &mut puzzles_eligible,
+                    &mut spins_earned_from_puzzles,
+                    &mut total_eligible,
+                );
+
+                let new_puzzles_count = chunk_puzzles.iter().filter(|p| p.date > current_puzzle_since).count();
+                total_puzzles_processed += new_puzzles_count;
+
+                {
+                    let conn = state.db.lock().unwrap();
+                    let current_g_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_game_sync).unwrap_or(0);
+                    let _ = db::update_sync_timestamps(&conn, &username, current_g_sync, current_puzzle_before);
+                }
+
+                current_puzzle_since = current_puzzle_before;
+                puzzle_chunk_duration = 90 * 24 * 60 * 60 * 1000;
+            }
+            Err(_) => {
+                if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
+                    break;
+                }
+                puzzle_chunk_duration = actual_duration / 2;
+            }
+        }
+    }
 
     {
         let conn = state.db.lock().unwrap();
-        let _ = db::update_sync_timestamps(&conn, &username, new_last_game_sync, new_last_puzzle_sync);
         let _ = db::update_last_synced_at(&conn, &username, sync_start_time);
     }
 
@@ -534,15 +592,15 @@ pub async fn claim_sync(
         "games_sync_spins": games_claimed,
         "puzzles_sync_spins": spins_earned_from_puzzles,
         "daily_spin_claimed": false,
-        "puzzles_processed": new_puzzles.len(),
+        "puzzles_processed": total_puzzles_processed,
         "eligible_unclaimed_puzzles": total_eligible % divisor,
         "puzzles_per_spin": divisor,
         "spins_available": updated_user.spins_available,
         "coins": updated_user.coins,
         "games_eligible": games_eligible,
         "puzzles_eligible": puzzles_eligible,
-        "last_game_sync": new_last_game_sync,
-        "last_puzzle_sync": new_last_puzzle_sync,
+        "last_game_sync": updated_user.last_game_sync,
+        "last_puzzle_sync": updated_user.last_puzzle_sync,
         "last_synced_at": sync_start_time
     })).into_response()
 }
