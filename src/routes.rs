@@ -399,7 +399,7 @@ fn process_puzzles_chunk_backward(
         };
         let min_required_rating = before_play_rating + spin_rules.puzzle_rating_offset;
         
-        if p.win && p.puzzle.rating >= min_required_rating {
+        if is_rated && p.win && p.puzzle.rating >= min_required_rating {
             *puzzles_eligible += 1;
             let claimed = conn.query_row(
                 "SELECT COUNT(*) FROM claimed_puzzles WHERE username = ?1 AND puzzle_id = ?2",
