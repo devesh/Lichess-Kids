@@ -513,13 +513,13 @@ pub async fn claim_sync(
 
                 current_game_since = current_game_until;
                 
-                let loaded_items = chunk_games.len() as i64;
-                if loaded_items >= 100 {
-                    game_chunk_duration = 90 * 24 * 60 * 60 * 1000;
-                } else {
-                    let multiplier = if loaded_items == 0 { 100 } else { 100 / loaded_items };
-                    game_chunk_duration = std::cmp::min(game_chunk_duration * multiplier, 3 * 365 * 24 * 60 * 60 * 1000);
-                }
+                let loaded_items = chunk_games.len() as f64;
+                let multiplier = if loaded_items == 0.0 { 100.0 } else { 100.0 / loaded_items };
+                let new_duration = (game_chunk_duration as f64 * multiplier) as i64;
+                game_chunk_duration = std::cmp::max(
+                    60 * 60 * 1000,
+                    std::cmp::min(new_duration, 3 * 365 * 24 * 60 * 60 * 1000)
+                );
             }
             Err(_) => {
                 if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
@@ -573,13 +573,13 @@ pub async fn claim_sync(
 
                 current_puzzle_since = current_puzzle_before;
                 
-                let loaded_puzzles = chunk_puzzles.len() as i64;
-                if loaded_puzzles >= 100 {
-                    puzzle_chunk_duration = 90 * 24 * 60 * 60 * 1000;
-                } else {
-                    let multiplier = if loaded_puzzles == 0 { 100 } else { 100 / loaded_puzzles };
-                    puzzle_chunk_duration = std::cmp::min(puzzle_chunk_duration * multiplier, 3 * 365 * 24 * 60 * 60 * 1000);
-                }
+                let loaded_puzzles = chunk_puzzles.len() as f64;
+                let multiplier = if loaded_puzzles == 0.0 { 100.0 } else { 100.0 / loaded_puzzles };
+                let new_duration = (puzzle_chunk_duration as f64 * multiplier) as i64;
+                puzzle_chunk_duration = std::cmp::max(
+                    60 * 60 * 1000,
+                    std::cmp::min(new_duration, 3 * 365 * 24 * 60 * 60 * 1000)
+                );
             }
             Err(_) => {
                 if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
