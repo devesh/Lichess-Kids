@@ -13,6 +13,8 @@ pub struct UserProfile {
     pub last_synced_at: i64,
     pub last_game_sync: i64,
     pub last_puzzle_sync: i64,
+    pub total_games_claimed: i32,
+    pub total_puzzles_claimed: i32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -141,6 +143,18 @@ pub fn get_user(conn: &Connection, username: &str) -> Result<Option<UserProfile>
 
     let mut rows = stmt.query(params![username])?;
     if let Some(row) = rows.next()? {
+        let total_games_claimed: i32 = conn.query_row(
+            "SELECT COUNT(*) FROM claimed_games WHERE username = ?1",
+            params![username],
+            |row| row.get(0)
+        ).unwrap_or(0);
+
+        let total_puzzles_claimed: i32 = conn.query_row(
+            "SELECT COUNT(*) FROM claimed_puzzles WHERE username = ?1",
+            params![username],
+            |row| row.get(0)
+        ).unwrap_or(0);
+
         Ok(Some(UserProfile {
             username: row.get(0)?,
             avatar_base: row.get(1)?,
@@ -152,6 +166,8 @@ pub fn get_user(conn: &Connection, username: &str) -> Result<Option<UserProfile>
             last_synced_at: row.get(7).unwrap_or(0),
             last_game_sync: row.get(8).unwrap_or(0),
             last_puzzle_sync: row.get(9).unwrap_or(0),
+            total_games_claimed,
+            total_puzzles_claimed,
         }))
     } else {
         Ok(None)

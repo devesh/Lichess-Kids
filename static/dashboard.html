@@ -79,9 +79,13 @@
                 <div id="avatar-container" class="avatar-preview clickable-card"></div>
                 <div style="text-align: center;">
                     <h2 id="profile-name" style="margin-bottom: 2px;">Player</h2>
-                    <p style="color: var(--text-secondary); font-size: 0.9rem;">
+                    <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 4px;">
                         Game Rating: <span id="game-rating" style="font-weight:700;color:var(--knight-color);">1500</span> | 
                         Puzzles: <span id="puzzle-rating" style="font-weight:700;color:var(--bishop-color);">1500</span>
+                    </p>
+                    <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
+                        Games Won: <span id="total-games-won" style="font-weight:700;color:var(--success);">0</span> | 
+                        Puzzles Solved: <span id="total-puzzles-solved" style="font-weight:700;color:var(--success);">0</span>
                     </p>
                 </div>
 
@@ -357,9 +361,11 @@
                 document.getElementById('coins-display').innerText = userProfile.coins;
                 document.getElementById('spins-display').innerText = userProfile.spins_available;
 
-                // Update ratings
+                // Update ratings and total counts
                 document.getElementById('game-rating').innerText = userProfile.current_game_rating;
                 document.getElementById('puzzle-rating').innerText = userProfile.current_puzzle_rating;
+                document.getElementById('total-games-won').innerText = userProfile.total_games_claimed;
+                document.getElementById('total-puzzles-solved').innerText = userProfile.total_puzzles_claimed;
 
                 // Update Game and Puzzle Sync timestamps
                 const gameSyncEl = document.getElementById('latest-game-sync');

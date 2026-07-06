@@ -857,9 +857,13 @@ pub async fn get_user_profile_html(
         <div id="avatar-container" class="avatar-preview" style="width: 200px; height: 200px;"></div>
         <h2>{username}</h2>
         <p style="color: var(--text-secondary);">Lichess Kids Profile</p>
-        <p style="font-size: 0.95rem; color: var(--text-secondary);">
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 4px;">
             Game Rating: <span style="font-weight:700;color:var(--knight-color);">{game_rating}</span> |
             Puzzles: <span style="font-weight:700;color:var(--bishop-color);">{puzzle_rating}</span>
+        </p>
+        <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
+            Games Won: <span style="font-weight:700;color:var(--success);">{total_games_won}</span> | 
+            Puzzles Solved: <span style="font-weight:700;color:var(--success);">{total_puzzles_solved}</span>
         </p>
         <a href="https://lichess.org/@/{username}" target="_blank" class="btn btn-secondary" style="width: 100%;">View on Lichess</a>
     </div>
@@ -893,6 +897,8 @@ pub async fn get_user_profile_html(
         avatar_svg_url = avatar_svg_url,
         game_rating = user_profile.current_game_rating,
         puzzle_rating = user_profile.current_puzzle_rating,
+        total_games_won = user_profile.total_games_claimed,
+        total_puzzles_solved = user_profile.total_puzzles_claimed,
         top = equipped.top.as_deref().unwrap_or(""),
         bottom = equipped.bottom.as_deref().unwrap_or(""),
         hat = equipped.hat.as_deref().unwrap_or(""),
