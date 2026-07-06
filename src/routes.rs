@@ -3,7 +3,12 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     Json,
+    body::Body,
+    http::HeaderValue,
+    http::header::CONTENT_TYPE,
 };
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use base64::Engine;
 use rand::Rng;
 use rusqlite::{params, Connection};
@@ -427,14 +432,45 @@ fn process_puzzles_chunk(
     *puzzle_rating = sim_rating;
 }
 
+pub struct ChannelStream {
+    pub receiver: tokio::sync::mpsc::Receiver<axum::body::Bytes>,
+}
+
+impl futures_util::stream::Stream for ChannelStream {
+    type Item = Result<axum::body::Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.receiver).poll_recv(cx) {
+            Poll::Ready(Some(bytes)) => Poll::Ready(Some(Ok(bytes))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 #[axum::debug_handler]
 pub async fn claim_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
+    let (tx, rx) = tokio::sync::mpsc::channel::<axum::body::Bytes>(100);
+
     let username = match get_username(&headers) {
         Some(name) => name,
-        None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Not logged in" }))).into_response(),
+        None => {
+            let err_msg = serde_json::json!({
+                "type": "done",
+                "success": false,
+                "error": "Not logged in"
+            });
+            let _ = tx.try_send(axum::body::Bytes::from(err_msg.to_string() + "\n"));
+            let stream = ChannelStream { receiver: rx };
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(CONTENT_TYPE, HeaderValue::from_static("application/x-ndjson"))],
+                Body::from_stream(stream)
+            ).into_response();
+        }
     };
 
     let (token, mut puzzle_rating, last_game_sync, last_puzzle_sync) = {
@@ -465,158 +501,220 @@ pub async fn claim_sync(
 
     let token = match token {
         Some(t) => t,
-        None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Lichess token not found. Please log in again." }))).into_response(),
+        None => {
+            let err_msg = serde_json::json!({
+                "type": "done",
+                "success": false,
+                "error": "Lichess token not found. Please log in again."
+            });
+            let _ = tx.try_send(axum::body::Bytes::from(err_msg.to_string() + "\n"));
+            let stream = ChannelStream { receiver: rx };
+            return (
+                StatusCode::BAD_REQUEST,
+                [(CONTENT_TYPE, HeaderValue::from_static("application/x-ndjson"))],
+                Body::from_stream(stream)
+            ).into_response();
+        }
     };
 
-    // 1. Fetch user's rating profile
-    let mut profile_created_at = None;
-    if let Ok(p) = lichess::fetch_profile(&token).await {
-        let g_rate = p.perfs.blitz.or(p.perfs.rapid).map(|x| x.rating).unwrap_or(1500);
-        let p_rate = p.perfs.puzzle.map(|x| x.rating).unwrap_or(1500);
-        let conn = state.db.lock().unwrap();
-        let _ = db::update_user_ratings(&conn, &username, g_rate, p_rate);
-        puzzle_rating = p_rate;
-        profile_created_at = p.created_at;
-    }
-
-    let mut games_eligible = 0;
-    let mut games_claimed = 0;
-
-    let mut current_game_since = if last_game_sync == 0 {
-        profile_created_at.unwrap_or(sync_start_time - 30 * 24 * 60 * 60 * 1000)
-    } else {
-        last_game_sync
-    };
-
-    let mut game_chunk_duration = 90 * 24 * 60 * 60 * 1000; // 90 days in ms
-
-    while current_game_since < sync_start_time {
-        let current_game_until = std::cmp::min(current_game_since + game_chunk_duration, sync_start_time);
-        let actual_duration = current_game_until - current_game_since;
-
-        match lichess::fetch_games(&username, &token, Some(current_game_since), Some(current_game_until)).await {
-            Ok(chunk_games) => {
-                process_games_chunk(
-                    &state.db,
-                    &username,
-                    &chunk_games,
-                    &state.assets.spin_rules,
-                    &mut games_eligible,
-                    &mut games_claimed,
-                );
-
-                {
-                    let conn = state.db.lock().unwrap();
-                    let current_p_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_puzzle_sync).unwrap_or(0);
-                    let _ = db::update_sync_timestamps(&conn, &username, current_game_until, current_p_sync);
+    tokio::spawn(async move {
+        macro_rules! send_update {
+            ($val:expr) => {
+                let msg = serde_json::to_string(&$val).unwrap() + "\n";
+                if tx.send(axum::body::Bytes::from(msg)).await.is_err() {
+                    return;
                 }
+            };
+        }
 
-                current_game_since = current_game_until;
-                
-                let loaded_items = chunk_games.len() as f64;
-                let multiplier = if loaded_items == 0.0 { 100.0 } else { 100.0 / loaded_items };
-                let new_duration = (game_chunk_duration as f64 * multiplier) as i64;
-                game_chunk_duration = std::cmp::max(
-                    60 * 60 * 1000,
-                    std::cmp::min(new_duration, 3 * 365 * 24 * 60 * 60 * 1000)
-                );
-            }
-            Err(_) => {
-                if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
-                    break;
+        // 1. Fetch user's rating profile
+        let mut profile_created_at = None;
+        if let Ok(p) = lichess::fetch_profile(&token).await {
+            let g_rate = p.perfs.blitz.or(p.perfs.rapid).map(|x| x.rating).unwrap_or(1500);
+            let p_rate = p.perfs.puzzle.map(|x| x.rating).unwrap_or(1500);
+            let conn = state.db.lock().unwrap();
+            let _ = db::update_user_ratings(&conn, &username, g_rate, p_rate);
+            puzzle_rating = p_rate;
+            profile_created_at = p.created_at;
+        }
+
+        let mut games_eligible = 0;
+        let mut games_claimed = 0;
+
+        let start_game_time = if last_game_sync == 0 {
+            profile_created_at.unwrap_or(sync_start_time - 30 * 24 * 60 * 60 * 1000)
+        } else {
+            last_game_sync
+        };
+
+        let mut current_game_since = start_game_time;
+        let mut game_chunk_duration = 90 * 24 * 60 * 60 * 1000; // 90 days in ms
+        let total_game_dist = sync_start_time - start_game_time;
+
+        while current_game_since < sync_start_time {
+            let current_game_until = std::cmp::min(current_game_since + game_chunk_duration, sync_start_time);
+            let actual_duration = current_game_until - current_game_since;
+
+            match lichess::fetch_games(&username, &token, Some(current_game_since), Some(current_game_until)).await {
+                Ok(chunk_games) => {
+                    process_games_chunk(
+                        &state.db,
+                        &username,
+                        &chunk_games,
+                        &state.assets.spin_rules,
+                        &mut games_eligible,
+                        &mut games_claimed,
+                    );
+
+                    {
+                        let conn = state.db.lock().unwrap();
+                        let current_p_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_puzzle_sync).unwrap_or(0);
+                        let _ = db::update_sync_timestamps(&conn, &username, current_game_until, current_p_sync);
+                    }
+
+                    current_game_since = current_game_until;
+
+                    let percent = if total_game_dist > 0 {
+                        ((current_game_since - start_game_time) as f64 / total_game_dist as f64) * 50.0
+                    } else {
+                        50.0
+                    };
+
+                    send_update!(serde_json::json!({
+                        "type": "progress",
+                        "percent": percent,
+                        "last_game_sync": current_game_since
+                    }));
+
+                    let loaded_items = chunk_games.len() as f64;
+                    let multiplier = if loaded_items == 0.0 { 100.0 } else { 100.0 / loaded_items };
+                    let new_duration = (game_chunk_duration as f64 * multiplier) as i64;
+                    game_chunk_duration = std::cmp::max(
+                        60 * 60 * 1000,
+                        std::cmp::min(new_duration, 3 * 365 * 24 * 60 * 60 * 1000)
+                    );
                 }
-                game_chunk_duration = actual_duration / 2;
+                Err(_) => {
+                    if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
+                        break;
+                    }
+                    game_chunk_duration = actual_duration / 2;
+                }
             }
         }
-    }
 
-    let mut mut_puzzle_rating = puzzle_rating;
-    let mut puzzles_eligible = 0;
-    let mut spins_earned_from_puzzles = 0;
-    let mut total_eligible = 0;
-    let mut total_puzzles_processed = 0;
+        let mut mut_puzzle_rating = puzzle_rating;
+        let mut puzzles_eligible = 0;
+        let mut spins_earned_from_puzzles = 0;
+        let mut total_eligible = 0;
+        let mut total_puzzles_processed = 0;
 
-    let mut current_puzzle_since = if last_puzzle_sync == 0 {
-        profile_created_at.unwrap_or(sync_start_time - 30 * 24 * 60 * 60 * 1000)
-    } else {
-        last_puzzle_sync
-    };
+        let start_puzzle_time = if last_puzzle_sync == 0 {
+            profile_created_at.unwrap_or(sync_start_time - 30 * 24 * 60 * 60 * 1000)
+        } else {
+            last_puzzle_sync
+        };
 
-    let mut puzzle_chunk_duration = 90 * 24 * 60 * 60 * 1000; // 90 days in ms
+        let mut current_puzzle_since = start_puzzle_time;
+        let mut puzzle_chunk_duration = 90 * 24 * 60 * 60 * 1000; // 90 days in ms
+        let total_puzzle_dist = sync_start_time - start_puzzle_time;
 
-    while current_puzzle_since < sync_start_time {
-        let current_puzzle_before = std::cmp::min(current_puzzle_since + puzzle_chunk_duration, sync_start_time);
-        let actual_duration = current_puzzle_before - current_puzzle_since;
+        while current_puzzle_since < sync_start_time {
+            let current_puzzle_before = std::cmp::min(current_puzzle_since + puzzle_chunk_duration, sync_start_time);
+            let actual_duration = current_puzzle_before - current_puzzle_since;
 
-        match lichess::fetch_puzzle_activity(&token, Some(current_puzzle_since), Some(current_puzzle_before)).await {
-            Ok(chunk_puzzles) => {
-                process_puzzles_chunk(
-                    &state.db,
-                    &username,
-                    &chunk_puzzles,
-                    &state.assets.spin_rules,
-                    current_puzzle_since,
-                    &mut mut_puzzle_rating,
-                    &mut puzzles_eligible,
-                    &mut spins_earned_from_puzzles,
-                    &mut total_eligible,
-                );
+            match lichess::fetch_puzzle_activity(&token, Some(current_puzzle_since), Some(current_puzzle_before)).await {
+                Ok(chunk_puzzles) => {
+                    process_puzzles_chunk(
+                        &state.db,
+                        &username,
+                        &chunk_puzzles,
+                        &state.assets.spin_rules,
+                        current_puzzle_since,
+                        &mut mut_puzzle_rating,
+                        &mut puzzles_eligible,
+                        &mut spins_earned_from_puzzles,
+                        &mut total_eligible,
+                    );
 
-                let new_puzzles_count = chunk_puzzles.iter().filter(|p| p.date > current_puzzle_since).count();
-                total_puzzles_processed += new_puzzles_count;
+                    let new_puzzles_count = chunk_puzzles.iter().filter(|p| p.date > current_puzzle_since).count();
+                    total_puzzles_processed += new_puzzles_count;
 
-                {
-                    let conn = state.db.lock().unwrap();
-                    let current_g_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_game_sync).unwrap_or(0);
-                    let _ = db::update_sync_timestamps(&conn, &username, current_g_sync, current_puzzle_before);
+                    {
+                        let conn = state.db.lock().unwrap();
+                        let current_g_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_game_sync).unwrap_or(0);
+                        let _ = db::update_sync_timestamps(&conn, &username, current_g_sync, current_puzzle_before);
+                    }
+
+                    current_puzzle_since = current_puzzle_before;
+
+                    let percent = if total_puzzle_dist > 0 {
+                        50.0 + ((current_puzzle_since - start_puzzle_time) as f64 / total_puzzle_dist as f64) * 50.0
+                    } else {
+                        100.0
+                    };
+
+                    send_update!(serde_json::json!({
+                        "type": "progress",
+                        "percent": percent,
+                        "last_puzzle_sync": current_puzzle_since
+                    }));
+
+                    let loaded_puzzles = chunk_puzzles.len() as f64;
+                    let multiplier = if loaded_puzzles == 0.0 { 100.0 } else { 100.0 / loaded_puzzles };
+                    let new_duration = (puzzle_chunk_duration as f64 * multiplier) as i64;
+                    puzzle_chunk_duration = std::cmp::max(
+                        60 * 60 * 1000,
+                        std::cmp::min(new_duration, 3 * 365 * 24 * 60 * 60 * 1000)
+                    );
                 }
-
-                current_puzzle_since = current_puzzle_before;
-                
-                let loaded_puzzles = chunk_puzzles.len() as f64;
-                let multiplier = if loaded_puzzles == 0.0 { 100.0 } else { 100.0 / loaded_puzzles };
-                let new_duration = (puzzle_chunk_duration as f64 * multiplier) as i64;
-                puzzle_chunk_duration = std::cmp::max(
-                    60 * 60 * 1000,
-                    std::cmp::min(new_duration, 3 * 365 * 24 * 60 * 60 * 1000)
-                );
-            }
-            Err(_) => {
-                if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
-                    break;
+                Err(_) => {
+                    if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
+                        break;
+                    }
+                    puzzle_chunk_duration = actual_duration / 2;
                 }
-                puzzle_chunk_duration = actual_duration / 2;
             }
         }
-    }
 
-    {
-        let conn = state.db.lock().unwrap();
-        let _ = db::update_last_synced_at(&conn, &username, sync_start_time);
-    }
+        {
+            let conn = state.db.lock().unwrap();
+            let _ = db::update_last_synced_at(&conn, &username, sync_start_time);
+        }
 
-    let updated_user = {
-        let conn = state.db.lock().unwrap();
-        db::get_user(&conn, &username).unwrap().unwrap()
-    };
+        let updated_user = {
+            let conn = state.db.lock().unwrap();
+            db::get_user(&conn, &username).unwrap().unwrap()
+        };
 
-    let divisor = std::cmp::max(1, state.assets.spin_rules.puzzles_per_spin as usize);
-    Json(serde_json::json!({
-        "success": true,
-        "games_sync_spins": games_claimed,
-        "puzzles_sync_spins": spins_earned_from_puzzles,
-        "daily_spin_claimed": false,
-        "puzzles_processed": total_puzzles_processed,
-        "eligible_unclaimed_puzzles": total_eligible % divisor,
-        "puzzles_per_spin": divisor,
-        "spins_available": updated_user.spins_available,
-        "coins": updated_user.coins,
-        "games_eligible": games_eligible,
-        "puzzles_eligible": puzzles_eligible,
-        "last_game_sync": updated_user.last_game_sync,
-        "last_puzzle_sync": updated_user.last_puzzle_sync,
-        "last_synced_at": sync_start_time
-    })).into_response()
+        let divisor = std::cmp::max(1, state.assets.spin_rules.puzzles_per_spin as usize);
+        send_update!(serde_json::json!({
+            "type": "done",
+            "success": true,
+            "games_sync_spins": games_claimed,
+            "puzzles_sync_spins": spins_earned_from_puzzles,
+            "daily_spin_claimed": false,
+            "puzzles_processed": total_puzzles_processed,
+            "eligible_unclaimed_puzzles": total_eligible % divisor,
+            "puzzles_per_spin": divisor,
+            "spins_available": updated_user.spins_available,
+            "coins": updated_user.coins,
+            "games_eligible": games_eligible,
+            "puzzles_eligible": puzzles_eligible,
+            "last_game_sync": updated_user.last_game_sync,
+            "last_puzzle_sync": updated_user.last_puzzle_sync,
+            "last_synced_at": sync_start_time
+        }));
+    });
+
+    let stream = ChannelStream { receiver: rx };
+    let body = Body::from_stream(stream);
+    
+    (
+        StatusCode::OK,
+        [(CONTENT_TYPE, HeaderValue::from_static("application/x-ndjson"))],
+        body
+    ).into_response()
 }
 
 // -------------------------------------------------------------

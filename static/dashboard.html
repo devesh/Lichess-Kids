@@ -681,42 +681,66 @@
             progressContainer.style.display = 'block';
             progressBar.style.width = '0%';
             
-            let progress = 0;
-            const progressInterval = setInterval(() => {
-                if (progress < 40) {
-                    progress += 5;
-                } else if (progress < 70) {
-                    progress += 2;
-                } else if (progress < 90) {
-                    progress += 0.5;
-                }
-                progressBar.style.width = `${progress}%`;
-            }, 100);
-            
             try {
                 const res = await fetch('/api/claim-sync', { method: 'POST' });
-                const data = await res.json();
-                
-                clearInterval(progressInterval);
-                progressBar.style.width = '100%';
-                setTimeout(() => {
-                    progressContainer.style.display = 'none';
-                }, 300);
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let buffer = '';
 
-                if (data.success) {
-                    let totalSpins = data.games_sync_spins + data.puzzles_sync_spins;
-                    
-                    syncStatus.style.color = 'var(--success)';
-                    syncStatus.innerText = `Sync Complete! Earned ${totalSpins} spins. Found ${data.games_eligible} games won & ${data.puzzles_eligible} puzzles solved meeting criteria.`;
-                    
-                    // Reload profile to update spins balance and sync timestamp
-                    loadProfile();
-                } else {
-                    syncStatus.style.color = 'var(--error)';
-                    syncStatus.innerText = `Sync Failed: ${data.error}`;
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // Keep incomplete line in buffer
+
+                    for (const line of lines) {
+                        if (!line.trim()) continue;
+                        try {
+                            const data = JSON.parse(line);
+                            if (data.type === 'progress') {
+                                const percent = data.percent;
+                                progressBar.style.width = `${percent}%`;
+                                syncStatus.innerText = `Syncing achievements... ${Math.round(percent)}%`;
+
+                                if (data.last_game_sync) {
+                                    const gameSyncEl = document.getElementById('latest-game-sync');
+                                    if (gameSyncEl) {
+                                        const d = new Date(data.last_game_sync);
+                                        gameSyncEl.innerText = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                                    }
+                                }
+                                if (data.last_puzzle_sync) {
+                                    const puzzleSyncEl = document.getElementById('latest-puzzle-sync');
+                                    if (puzzleSyncEl) {
+                                        const d = new Date(data.last_puzzle_sync);
+                                        puzzleSyncEl.innerText = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                                    }
+                                }
+                            } else if (data.type === 'done') {
+                                progressBar.style.width = '100%';
+                                setTimeout(() => {
+                                    progressContainer.style.display = 'none';
+                                }, 300);
+
+                                if (data.success) {
+                                    let totalSpins = data.games_sync_spins + data.puzzles_sync_spins;
+                                    syncStatus.style.color = 'var(--success)';
+                                    syncStatus.innerText = `Sync Complete! Earned ${totalSpins} spins. Found ${data.games_eligible} games won & ${data.puzzles_eligible} puzzles solved meeting criteria.`;
+                                    // Reload profile to update spins balance and ratings
+                                    loadProfile();
+                                } else {
+                                    syncStatus.style.color = 'var(--error)';
+                                    syncStatus.innerText = `Sync Failed: ${data.error}`;
+                                }
+                            }
+                        } catch (e) {
+                            console.error("Failed to parse chunk line:", e);
+                        }
+                    }
                 }
             } catch (err) {
-                clearInterval(progressInterval);
                 progressBar.style.width = '0%';
                 progressContainer.style.display = 'none';
                 console.error(err);
