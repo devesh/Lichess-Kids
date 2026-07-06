@@ -761,6 +761,14 @@
                             <a href="${friend.lichess_url}" target="_blank" class="btn btn-secondary" style="padding: 6px 12px; font-size: 0.8rem; border-color: var(--knight-color); color: var(--knight-color);">Lichess</a>
                         </div>
                     `;
+                    card.style.cursor = 'pointer';
+                    card.addEventListener('click', (e) => {
+                        if (e.target.tagName.toLowerCase() === 'a' || e.target.closest('a')) {
+                            return;
+                        }
+                        window.location.href = `/user/${friend.username}`;
+                    });
+
                     friendsList.appendChild(card);
 
                     // Render friend's miniature avatar
