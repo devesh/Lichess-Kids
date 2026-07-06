@@ -369,7 +369,7 @@ fn process_puzzles_chunk_backward(
     puzzles_eligible: &mut i32,
     spins_earned_from_puzzles: &mut i32,
     total_eligible: &mut usize,
-    puzzle_history_days: &std::collections::HashSet<(i32, i32, i32)>,
+    puzzle_history_days: &std::collections::HashMap<(i32, i32, i32), i32>,
 ) {
     let new_puzzles: Vec<_> = puzzles.iter().filter(|p| p.date > last_puzzle_sync).cloned().collect();
     if new_puzzles.is_empty() {
@@ -378,7 +378,10 @@ fn process_puzzles_chunk_backward(
 
     let mut eligible_puzzle_ids = Vec::new();
     let conn = db.lock().unwrap();
+    
     let mut running_rating = *current_puzzle_rating;
+    let mut running_rd = 80.0f64;
+    let mut last_day = None;
 
     for p in &new_puzzles {
         let datetime = match Utc.timestamp_millis_opt(p.date) {
@@ -388,15 +391,45 @@ fn process_puzzles_chunk_backward(
         let y = datetime.year() as i32;
         let m = datetime.month0() as i32;
         let d = datetime.day() as i32;
+        let current_day = (y, m, d);
 
-        let is_rated = puzzle_history_days.contains(&(y, m, d));
+        // Daily checkpoint reset (going backward)
+        if Some(current_day) != last_day {
+            if last_day.is_some() {
+                if let Some(&official_rating) = puzzle_history_days.get(&current_day) {
+                    running_rating = official_rating;
+                    running_rd = 80.0f64;
+                }
+            }
+            last_day = Some(current_day);
+        }
+
+        let is_rated = puzzle_history_days.contains_key(&current_day);
 
         let before_play_rating = if is_rated {
-            let change = if p.win { 10 } else { -10 };
-            std::cmp::max(600, running_rating - change)
+            let q = 0.00575646273;
+            let r_opp = p.puzzle.rating as f64;
+            
+            let e = 1.0 / (1.0 + 10.0f64.powf(-(running_rating as f64 - r_opp) / 400.0));
+            let d2 = 1.0 / (q * q * e * (1.0 - e));
+            
+            let s = if p.win { 1.0 } else { 0.0 };
+            
+            let new_rating = (running_rating as f64) - q * (running_rd * running_rd) * (s - e);
+            let new_rd2 = 1.0 / (1.0 / (running_rd * running_rd) - 1.0 / d2);
+            
+            let new_rd = if new_rd2 > 0.0 {
+                (1.0 / new_rd2).sqrt().max(40.0).min(350.0)
+            } else {
+                350.0
+            };
+            
+            running_rd = new_rd;
+            (new_rating.round() as i32).max(600).min(3500)
         } else {
             running_rating
         };
+
         let min_required_rating = before_play_rating + spin_rules.puzzle_rating_offset;
         
         if is_rated && p.win && p.puzzle.rating >= min_required_rating {
@@ -538,15 +571,16 @@ pub async fn claim_sync(
             profile_created_at = p.created_at;
         }
 
-        let mut puzzle_history_days = std::collections::HashSet::new();
+        let mut puzzle_history_days = std::collections::HashMap::new();
         if let Ok(history) = lichess::fetch_rating_history(&username).await {
             if let Some(p_hist) = history.into_iter().find(|h| h.name == "Puzzles") {
                 for pt in p_hist.points {
-                    if pt.len() >= 3 {
+                    if pt.len() >= 4 {
                         let y = pt[0];
                         let m = pt[1]; // 0-indexed month
                         let d = pt[2];
-                        puzzle_history_days.insert((y, m, d));
+                        let rating = pt[3];
+                        puzzle_history_days.insert((y, m, d), rating);
                     }
                 }
             }
