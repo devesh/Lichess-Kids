@@ -18,6 +18,8 @@ pub struct LichessProfile {
     pub id: String,
     pub username: String,
     pub perfs: LichessPerfs,
+    #[serde(rename = "createdAt")]
+    pub created_at: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -73,7 +75,7 @@ pub async fn fetch_profile(token: &str) -> Result<LichessProfile, reqwest::Error
     response.error_for_status()?.json::<LichessProfile>().await
 }
 
-pub async fn fetch_games(username: &str, token: &str, since: Option<i64>) -> Result<Vec<LichessGame>, reqwest::Error> {
+pub async fn fetch_games(username: &str, token: &str, since: Option<i64>, until: Option<i64>) -> Result<Vec<LichessGame>, reqwest::Error> {
     let client = reqwest::Client::new();
     let mut query = vec![
         ("rated", "true".to_string()),
@@ -83,6 +85,11 @@ pub async fn fetch_games(username: &str, token: &str, since: Option<i64>) -> Res
     if let Some(s) = since {
         if s > 0 {
             query.push(("since", s.to_string()));
+        }
+    }
+    if let Some(u) = until {
+        if u > 0 {
+            query.push(("until", u.to_string()));
         }
     }
 
@@ -108,12 +115,17 @@ pub async fn fetch_games(username: &str, token: &str, since: Option<i64>) -> Res
     Ok(games)
 }
 
-pub async fn fetch_puzzle_activity(token: &str, since: Option<i64>) -> Result<Vec<LichessPuzzleRound>, reqwest::Error> {
+pub async fn fetch_puzzle_activity(token: &str, since: Option<i64>, before: Option<i64>) -> Result<Vec<LichessPuzzleRound>, reqwest::Error> {
     let client = reqwest::Client::new();
     let mut query = Vec::new();
     if let Some(s) = since {
         if s > 0 {
             query.push(("since", s.to_string()));
+        }
+    }
+    if let Some(b) = before {
+        if b > 0 {
+            query.push(("before", b.to_string()));
         }
     }
 

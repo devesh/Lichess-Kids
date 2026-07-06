@@ -352,20 +352,37 @@ pub async fn claim_sync(
     };
 
     // 1. Fetch user's rating profile
+    let mut profile_created_at = None;
     if let Ok(p) = lichess::fetch_profile(&token).await {
         let g_rate = p.perfs.blitz.or(p.perfs.rapid).map(|x| x.rating).unwrap_or(1500);
         let p_rate = p.perfs.puzzle.map(|x| x.rating).unwrap_or(1500);
         let conn = state.db.lock().unwrap();
         let _ = db::update_user_ratings(&conn, &username, g_rate, p_rate);
         puzzle_rating = p_rate;
+        profile_created_at = p.created_at;
     }
 
-    // 2. Fetch and evaluate games
-    // A spin for every person/bot you beat with rating >= user's rating at time of play
-    let games = match lichess::fetch_games(&username, &token, Some(last_game_sync)).await {
-        Ok(g) => g,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Games fetch failed: {}", e) }))).into_response(),
+    let chunk_size = 90 * 24 * 60 * 60 * 1000; // 90 days in ms
+
+    // 2. Fetch games in chunks since last_game_sync (or profile_created_at if initial sync)
+    let start_game_time = last_game_sync;
+    let mut current_game_since = if start_game_time == 0 {
+        profile_created_at.unwrap_or(sync_start_time - 30 * 24 * 60 * 60 * 1000)
+    } else {
+        start_game_time
     };
+
+    let mut games = Vec::new();
+    while current_game_since < sync_start_time {
+        let current_game_until = std::cmp::min(current_game_since + chunk_size, sync_start_time);
+        if let Ok(chunk_games) = lichess::fetch_games(&username, &token, Some(current_game_since), Some(current_game_until)).await {
+            games.extend(chunk_games);
+        } else {
+            // Break early on chunk fetch error
+            break;
+        }
+        current_game_since = current_game_until;
+    }
 
     let mut games_eligible = 0;
     let mut games_claimed = 0;
@@ -405,10 +422,25 @@ pub async fn claim_sync(
         }
     }
 
-    let puzzles = match lichess::fetch_puzzle_activity(&token, Some(last_puzzle_sync)).await {
-        Ok(p) => p,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Puzzles fetch failed: {}", e) }))).into_response(),
+    // 3. Fetch puzzles in chunks since last_puzzle_sync (or profile_created_at if initial sync)
+    let start_puzzle_time = last_puzzle_sync;
+    let mut current_puzzle_since = if start_puzzle_time == 0 {
+        profile_created_at.unwrap_or(sync_start_time - 30 * 24 * 60 * 60 * 1000)
+    } else {
+        start_puzzle_time
     };
+
+    let mut puzzles = Vec::new();
+    while current_puzzle_since < sync_start_time {
+        let current_puzzle_before = std::cmp::min(current_puzzle_since + chunk_size, sync_start_time);
+        if let Ok(chunk_puzzles) = lichess::fetch_puzzle_activity(&token, Some(current_puzzle_since), Some(current_puzzle_before)).await {
+            puzzles.extend(chunk_puzzles);
+        } else {
+            // Break early on chunk fetch error
+            break;
+        }
+        current_puzzle_since = current_puzzle_before;
+    }
 
     let mut new_last_game_sync = last_game_sync;
     for g in &games {
