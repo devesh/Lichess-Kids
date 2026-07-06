@@ -536,35 +536,47 @@ pub async fn claim_sync(
             last_game_sync
         };
 
-        let mut current_game_since = start_game_time;
-        let mut game_chunk_duration = 90 * 24 * 60 * 60 * 1000; // 90 days in ms
+        let mut current_game_before = sync_start_time;
+        let mut game_chunk_limit = 100;
         let total_game_dist = sync_start_time - start_game_time;
 
-        while current_game_since < sync_start_time {
-            let current_game_until = std::cmp::min(current_game_since + game_chunk_duration, sync_start_time);
-            let actual_duration = current_game_until - current_game_since;
+        while current_game_before > last_game_sync {
+            let mut query = vec![
+                ("rated", "true".to_string()),
+                ("moves", "false".to_string()),
+                ("max", game_chunk_limit.to_string()),
+            ];
+            if current_game_before < sync_start_time {
+                query.push(("until", current_game_before.to_string()));
+            }
 
-            match lichess::fetch_games(&username, &token, Some(current_game_since), Some(current_game_until)).await {
+            match lichess::fetch_games(&username, &token, &query).await {
                 Ok(chunk_games) => {
+                    if chunk_games.is_empty() {
+                        break;
+                    }
+
+                    let new_games: Vec<_> = chunk_games.iter().filter(|g| g.created_at > last_game_sync).cloned().collect();
+                    if new_games.is_empty() {
+                        break;
+                    }
+
                     process_games_chunk(
                         &state.db,
                         &username,
-                        &chunk_games,
+                        &new_games,
                         &state.assets.spin_rules,
                         &mut games_eligible,
                         &mut games_claimed,
                     );
 
-                    {
-                        let conn = state.db.lock().unwrap();
-                        let current_p_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_puzzle_sync).unwrap_or(0);
-                        let _ = db::update_sync_timestamps(&conn, &username, current_game_until, current_p_sync);
-                    }
-
-                    current_game_since = current_game_until;
+                    let oldest_game_date = chunk_games.last().unwrap().created_at;
+                    current_game_before = oldest_game_date;
 
                     let percent = if total_game_dist > 0 {
-                        ((current_game_since - start_game_time) as f64 / total_game_dist as f64) * 50.0
+                        let processed_dist = sync_start_time - current_game_before;
+                        let p = (processed_dist as f64 / total_game_dist as f64) * 50.0;
+                        if p > 50.0 { 50.0 } else { p }
                     } else {
                         50.0
                     };
@@ -572,25 +584,30 @@ pub async fn claim_sync(
                     send_update!(serde_json::json!({
                         "type": "progress",
                         "percent": percent,
-                        "last_game_sync": current_game_since
+                        "last_game_sync": current_game_before
                     }));
 
-                    let loaded_items = chunk_games.len() as f64;
-                    let multiplier = if loaded_items == 0.0 { 100.0 } else { 100.0 / loaded_items };
-                    let new_duration = (game_chunk_duration as f64 * multiplier) as i64;
-                    game_chunk_duration = std::cmp::max(
-                        60 * 60 * 1000,
-                        std::cmp::min(new_duration, 3 * 365 * 24 * 60 * 60 * 1000)
-                    );
+                    let loaded_count = new_games.len();
+                    if loaded_count >= game_chunk_limit {
+                        game_chunk_limit = std::cmp::min(game_chunk_limit * 2, 1000);
+                    } else if loaded_count < game_chunk_limit / 2 {
+                        game_chunk_limit = std::cmp::max(100, game_chunk_limit / 2);
+                    }
                 }
                 Err(_) => {
-                    if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
+                    if game_chunk_limit <= 10 {
                         game_sync_fully_succeeded = false;
                         break;
                     }
-                    game_chunk_duration = actual_duration / 2;
+                    game_chunk_limit = game_chunk_limit / 2;
                 }
             }
+        }
+
+        if game_sync_fully_succeeded {
+            let conn = state.db.lock().unwrap();
+            let current_p_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_puzzle_sync).unwrap_or(0);
+            let _ = db::update_sync_timestamps(&conn, &username, sync_start_time, current_p_sync);
         }
 
         let mut mut_puzzle_rating = puzzle_rating;

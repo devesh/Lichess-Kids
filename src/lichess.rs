@@ -75,27 +75,11 @@ pub async fn fetch_profile(token: &str) -> Result<LichessProfile, reqwest::Error
     response.error_for_status()?.json::<LichessProfile>().await
 }
 
-pub async fn fetch_games(username: &str, token: &str, since: Option<i64>, until: Option<i64>) -> Result<Vec<LichessGame>, reqwest::Error> {
+pub async fn fetch_games(username: &str, token: &str, query: &[(&str, String)]) -> Result<Vec<LichessGame>, reqwest::Error> {
     let client = reqwest::Client::new();
-    let mut query = vec![
-        ("rated", "true".to_string()),
-        ("moves", "false".to_string()),
-        ("sort", "dateAsc".to_string()),
-    ];
-    if let Some(s) = since {
-        if s > 0 {
-            query.push(("since", s.to_string()));
-        }
-    }
-    if let Some(u) = until {
-        if u > 0 {
-            query.push(("until", u.to_string()));
-        }
-    }
-
     let response = client
         .get(format!("https://lichess.org/api/games/user/{}", username))
-        .query(&query)
+        .query(query)
         .bearer_auth(token)
         .header("User-Agent", "LichessKids-App/1.0")
         .header("Accept", "application/x-ndjson")
