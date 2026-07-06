@@ -358,13 +358,13 @@ fn process_games_chunk(
     }
 }
 
-fn process_puzzles_chunk(
+fn process_puzzles_chunk_backward(
     db: &std::sync::Mutex<rusqlite::Connection>,
     username: &str,
     puzzles: &[lichess::LichessPuzzleRound],
     spin_rules: &crate::assets::SpinRules,
     last_puzzle_sync: i64,
-    puzzle_rating: &mut i32,
+    current_puzzle_rating: &mut i32,
     puzzles_eligible: &mut i32,
     spins_earned_from_puzzles: &mut i32,
     total_eligible: &mut usize,
@@ -374,25 +374,17 @@ fn process_puzzles_chunk(
         return;
     }
 
-    let mut puzzles_chronological = new_puzzles.clone();
-    puzzles_chronological.sort_by_key(|p| p.date);
-
-    let mut wins = 0;
-    let mut losses = 0;
-    for p in &puzzles_chronological {
-        if p.win {
-            wins += 1;
-        } else {
-            losses += 1;
-        }
-    }
-
-    let mut sim_rating = std::cmp::max(600, *puzzle_rating - (wins * 10 - losses * 10));
     let mut eligible_puzzle_ids = Vec::new();
     let conn = db.lock().unwrap();
+    let mut running_rating = *current_puzzle_rating;
 
-    for p in puzzles_chronological {
-        let before_play_rating = sim_rating;
+    for p in &new_puzzles {
+        let before_play_rating = if p.win {
+            running_rating - 10
+        } else {
+            running_rating + 10
+        };
+        let before_play_rating = std::cmp::max(600, before_play_rating);
         let min_required_rating = before_play_rating + spin_rules.puzzle_rating_offset;
         
         if p.win && p.puzzle.rating >= min_required_rating {
@@ -408,11 +400,7 @@ fn process_puzzles_chunk(
             }
         }
 
-        if p.win {
-            sim_rating += 10;
-        } else {
-            sim_rating -= 10;
-        }
+        running_rating = before_play_rating;
     }
 
     let divisor = std::cmp::max(1, spin_rules.puzzles_per_spin as usize);
@@ -429,7 +417,7 @@ fn process_puzzles_chunk(
     }
     
     *total_eligible += total;
-    *puzzle_rating = sim_rating;
+    *current_puzzle_rating = running_rating;
 }
 
 pub struct ChannelStream {
@@ -612,47 +600,65 @@ pub async fn claim_sync(
         let mut total_puzzles_processed = 0;
         let mut puzzle_sync_fully_succeeded = true;
 
-        let start_puzzle_time = if last_puzzle_sync == 0 {
-            profile_created_at.unwrap_or(sync_start_time - 30 * 24 * 60 * 60 * 1000)
-        } else {
-            last_puzzle_sync
-        };
+        let mut current_puzzle_before = sync_start_time;
+        let mut puzzle_chunk_limit = 100;
 
-        let mut current_puzzle_since = start_puzzle_time;
-        let mut puzzle_chunk_duration = 90 * 24 * 60 * 60 * 1000; // 90 days in ms
-        let total_puzzle_dist = sync_start_time - start_puzzle_time;
+        while current_puzzle_before > last_puzzle_sync {
+            let mut query = vec![("max", puzzle_chunk_limit.to_string())];
+            if current_puzzle_before < sync_start_time {
+                query.push(("before", current_puzzle_before.to_string()));
+            }
 
-        while current_puzzle_since < sync_start_time {
-            let current_puzzle_before = std::cmp::min(current_puzzle_since + puzzle_chunk_duration, sync_start_time);
-            let actual_duration = current_puzzle_before - current_puzzle_since;
-
-            match lichess::fetch_puzzle_activity(&token, Some(current_puzzle_since), Some(current_puzzle_before)).await {
+            match lichess::fetch_puzzle_activity(&token, &query).await {
                 Ok(chunk_puzzles) => {
-                    process_puzzles_chunk(
+                    if chunk_puzzles.is_empty() {
+                        {
+                            let conn = state.db.lock().unwrap();
+                            let current_g_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_game_sync).unwrap_or(0);
+                            let _ = db::update_sync_timestamps(&conn, &username, current_g_sync, sync_start_time);
+                        }
+                        break;
+                    }
+
+                    let new_puzzles: Vec<_> = chunk_puzzles.iter().filter(|p| p.date > last_puzzle_sync).cloned().collect();
+                    if new_puzzles.is_empty() {
+                        {
+                            let conn = state.db.lock().unwrap();
+                            let current_g_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_game_sync).unwrap_or(0);
+                            let _ = db::update_sync_timestamps(&conn, &username, current_g_sync, sync_start_time);
+                        }
+                        break;
+                    }
+
+                    process_puzzles_chunk_backward(
                         &state.db,
                         &username,
-                        &chunk_puzzles,
+                        &new_puzzles,
                         &state.assets.spin_rules,
-                        current_puzzle_since,
+                        last_puzzle_sync,
                         &mut mut_puzzle_rating,
                         &mut puzzles_eligible,
                         &mut spins_earned_from_puzzles,
                         &mut total_eligible,
                     );
 
-                    let new_puzzles_count = chunk_puzzles.iter().filter(|p| p.date > current_puzzle_since).count();
-                    total_puzzles_processed += new_puzzles_count;
+                    total_puzzles_processed += new_puzzles.len();
 
+                    let oldest_date = chunk_puzzles.last().unwrap().date;
                     {
                         let conn = state.db.lock().unwrap();
                         let current_g_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_game_sync).unwrap_or(0);
-                        let _ = db::update_sync_timestamps(&conn, &username, current_g_sync, current_puzzle_before);
+                        let target_puzzle_sync = std::cmp::max(last_puzzle_sync, oldest_date);
+                        let _ = db::update_sync_timestamps(&conn, &username, current_g_sync, target_puzzle_sync);
                     }
 
-                    current_puzzle_since = current_puzzle_before;
+                    current_puzzle_before = oldest_date;
 
+                    let total_puzzle_dist = sync_start_time - last_puzzle_sync;
                     let percent = if total_puzzle_dist > 0 {
-                        50.0 + ((current_puzzle_since - start_puzzle_time) as f64 / total_puzzle_dist as f64) * 50.0
+                        let processed_dist = sync_start_time - current_puzzle_before;
+                        let p = 50.0 + (processed_dist as f64 / total_puzzle_dist as f64) * 50.0;
+                        if p > 100.0 { 100.0 } else { p }
                     } else {
                         100.0
                     };
@@ -660,25 +666,30 @@ pub async fn claim_sync(
                     send_update!(serde_json::json!({
                         "type": "progress",
                         "percent": percent,
-                        "last_puzzle_sync": current_puzzle_since
+                        "last_puzzle_sync": current_puzzle_before
                     }));
 
-                    let loaded_puzzles = chunk_puzzles.len() as f64;
-                    let multiplier = if loaded_puzzles == 0.0 { 100.0 } else { 100.0 / loaded_puzzles };
-                    let new_duration = (puzzle_chunk_duration as f64 * multiplier) as i64;
-                    puzzle_chunk_duration = std::cmp::max(
-                        60 * 60 * 1000,
-                        std::cmp::min(new_duration, 3 * 365 * 24 * 60 * 60 * 1000)
-                    );
+                    let loaded_count = new_puzzles.len();
+                    if loaded_count >= puzzle_chunk_limit {
+                        puzzle_chunk_limit = std::cmp::min(puzzle_chunk_limit * 2, 1000);
+                    } else if loaded_count < puzzle_chunk_limit / 2 {
+                        puzzle_chunk_limit = std::cmp::max(100, puzzle_chunk_limit / 2);
+                    }
                 }
                 Err(_) => {
-                    if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
+                    if puzzle_chunk_limit <= 10 {
                         puzzle_sync_fully_succeeded = false;
                         break;
                     }
-                    puzzle_chunk_duration = actual_duration / 2;
+                    puzzle_chunk_limit = puzzle_chunk_limit / 2;
                 }
             }
+        }
+
+        if puzzle_sync_fully_succeeded {
+            let conn = state.db.lock().unwrap();
+            let current_g_sync = db::get_user(&conn, &username).unwrap().map(|u| u.last_game_sync).unwrap_or(0);
+            let _ = db::update_sync_timestamps(&conn, &username, current_g_sync, sync_start_time);
         }
 
         let all_chunks_succeeded = game_sync_fully_succeeded && puzzle_sync_fully_succeeded;

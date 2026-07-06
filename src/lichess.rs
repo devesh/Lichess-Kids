@@ -116,23 +116,11 @@ pub async fn fetch_games(username: &str, token: &str, since: Option<i64>, until:
     Ok(games)
 }
 
-pub async fn fetch_puzzle_activity(token: &str, since: Option<i64>, before: Option<i64>) -> Result<Vec<LichessPuzzleRound>, reqwest::Error> {
+pub async fn fetch_puzzle_activity(token: &str, query: &[(&str, String)]) -> Result<Vec<LichessPuzzleRound>, reqwest::Error> {
     let client = reqwest::Client::new();
-    let mut query = Vec::new();
-    if let Some(s) = since {
-        if s > 0 {
-            query.push(("since", s.to_string()));
-        }
-    }
-    if let Some(b) = before {
-        if b > 0 {
-            query.push(("before", b.to_string()));
-        }
-    }
-
     let response = client
         .get("https://lichess.org/api/puzzle/activity")
-        .query(&query)
+        .query(query)
         .bearer_auth(token)
         .header("User-Agent", "LichessKids-App/1.0")
         .header("Accept", "application/x-ndjson")
