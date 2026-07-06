@@ -130,6 +130,7 @@
     }
   ],
   "spin_rules": {
-    "game_rating_offset": -100
+    "game_rating_offset": -100,
+    "spins_per_game": 2
   }
 }

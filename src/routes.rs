@@ -350,9 +350,9 @@ fn process_games_chunk(
             if o_rate >= min_required_rating {
                 *games_eligible += 1;
                 if db::claim_game(&conn, username, &game.id).unwrap_or(false) {
-                    let _ = db::add_spins(&conn, username, 2);
+                    let _ = db::add_spins(&conn, username, spin_rules.spins_per_game);
                     *games_claimed += 1;
-                    *spins_earned_from_games += 2;
+                    *spins_earned_from_games += spin_rules.spins_per_game;
                 }
             }
         }

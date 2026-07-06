@@ -151,7 +151,7 @@
                     <!-- How to get more spins instructions -->
                     <div style="width: 100%; border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 8px; font-size: 0.8rem; line-height: 1.4; color: var(--text-secondary);">
                         <strong style="color: var(--text-primary); font-size: 0.85rem; display: block; margin-bottom: 6px;">How to Get More Spins:</strong>
-                        <ul style="padding-left: 16px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px;">
+                        <ul id="spin-rules-list" style="padding-left: 16px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px;">
                             <li>Win a rated game against a Lichess opponent rated &ge; (your ELO - 100) (+2 spins)</li>
                         </ul>
                         <span style="font-style: italic; font-size: 0.75rem; color: var(--knight-color);">
@@ -336,6 +336,14 @@
                 const catalogRes = await fetch('/api/assets/catalog');
                 const catalog = await catalogRes.json();
                 initAssets(catalog);
+
+                // Update spin rules list dynamic description
+                const rulesList = document.getElementById('spin-rules-list');
+                if (rulesList && catalog.spin_rules) {
+                    const spins = catalog.spin_rules.spins_per_game || 2;
+                    const offset = catalog.spin_rules.game_rating_offset || -100;
+                    rulesList.innerHTML = `<li>Win a rated game against a Lichess opponent rated &ge; (your ELO ${offset >= 0 ? '+' : ''}${offset}) (+${spins} spin${spins === 1 ? '' : 's'})</li>`;
+                }
             } catch (err) {
                 console.error("Failed to load assets catalog:", err);
             }
