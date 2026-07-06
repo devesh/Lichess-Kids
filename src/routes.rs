@@ -513,10 +513,12 @@ pub async fn claim_sync(
 
                 current_game_since = current_game_until;
                 
-                if chunk_games.len() < 5 {
-                    game_chunk_duration = std::cmp::min(game_chunk_duration * 2, 3 * 365 * 24 * 60 * 60 * 1000);
-                } else {
+                let loaded_items = chunk_games.len() as i64;
+                if loaded_items >= 100 {
                     game_chunk_duration = 90 * 24 * 60 * 60 * 1000;
+                } else {
+                    let multiplier = if loaded_items == 0 { 100 } else { 100 / loaded_items };
+                    game_chunk_duration = std::cmp::min(game_chunk_duration * multiplier, 3 * 365 * 24 * 60 * 60 * 1000);
                 }
             }
             Err(_) => {
@@ -571,10 +573,12 @@ pub async fn claim_sync(
 
                 current_puzzle_since = current_puzzle_before;
                 
-                if chunk_puzzles.len() < 5 {
-                    puzzle_chunk_duration = std::cmp::min(puzzle_chunk_duration * 2, 3 * 365 * 24 * 60 * 60 * 1000);
-                } else {
+                let loaded_puzzles = chunk_puzzles.len() as i64;
+                if loaded_puzzles >= 100 {
                     puzzle_chunk_duration = 90 * 24 * 60 * 60 * 1000;
+                } else {
+                    let multiplier = if loaded_puzzles == 0 { 100 } else { 100 / loaded_puzzles };
+                    puzzle_chunk_duration = std::cmp::min(puzzle_chunk_duration * multiplier, 3 * 365 * 24 * 60 * 60 * 1000);
                 }
             }
             Err(_) => {
