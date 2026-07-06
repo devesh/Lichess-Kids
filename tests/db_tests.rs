@@ -168,10 +168,15 @@ fn test_last_synced_at() {
 
     let u = db::get_user(&conn, "gabriel").unwrap().unwrap();
     assert_eq!(u.last_synced_at, 0);
+    assert_eq!(u.last_game_sync, 0);
+    assert_eq!(u.last_puzzle_sync, 0);
 
     db::update_last_synced_at(&conn, "gabriel", 123456789).unwrap();
+    db::update_sync_timestamps(&conn, "gabriel", 987654321, 555666777).unwrap();
     let u2 = db::get_user(&conn, "gabriel").unwrap().unwrap();
     assert_eq!(u2.last_synced_at, 123456789);
+    assert_eq!(u2.last_game_sync, 987654321);
+    assert_eq!(u2.last_puzzle_sync, 555666777);
 }
 
 #[test]

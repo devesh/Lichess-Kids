@@ -320,7 +320,7 @@ pub async fn claim_sync(
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Not logged in" }))).into_response(),
     };
 
-    let (token, mut puzzle_rating, last_synced_at) = {
+    let (token, mut puzzle_rating, last_game_sync, last_puzzle_sync) = {
         let conn = state.db.lock().unwrap();
         let token: Option<String> = conn
             .query_row(
@@ -331,12 +331,14 @@ pub async fn claim_sync(
             .ok();
 
         let mut p_rate = 1500;
-        let mut l_sync = 0;
+        let mut g_sync = 0;
+        let mut p_sync = 0;
         if let Some(user) = db::get_user(&conn, &username).unwrap() {
             p_rate = user.current_puzzle_rating;
-            l_sync = user.last_synced_at;
+            g_sync = user.last_game_sync;
+            p_sync = user.last_puzzle_sync;
         }
-        (token, p_rate, l_sync)
+        (token, p_rate, g_sync, p_sync)
     };
 
     let sync_start_time = std::time::SystemTime::now()
@@ -360,7 +362,7 @@ pub async fn claim_sync(
 
     // 2. Fetch and evaluate games
     // A spin for every person/bot you beat with rating >= user's rating at time of play
-    let games = match lichess::fetch_games(&username, &token, Some(last_synced_at)).await {
+    let games = match lichess::fetch_games(&username, &token, Some(last_game_sync)).await {
         Ok(g) => g,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Games fetch failed: {}", e) }))).into_response(),
     };
@@ -369,7 +371,7 @@ pub async fn claim_sync(
     let mut games_claimed = 0;
     {
         let conn = state.db.lock().unwrap();
-        for game in games {
+        for game in &games {
             if !game.rated {
                 continue;
             }
@@ -403,12 +405,26 @@ pub async fn claim_sync(
         }
     }
 
-    let puzzles = match lichess::fetch_puzzle_activity(&token, Some(last_synced_at)).await {
+    let puzzles = match lichess::fetch_puzzle_activity(&token, Some(last_puzzle_sync)).await {
         Ok(p) => p,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Puzzles fetch failed: {}", e) }))).into_response(),
     };
 
-    let new_puzzles: Vec<_> = puzzles.into_iter().filter(|p| p.date > last_synced_at).collect();
+    let mut new_last_game_sync = last_game_sync;
+    for g in &games {
+        if g.created_at > new_last_game_sync {
+            new_last_game_sync = g.created_at;
+        }
+    }
+
+    let mut new_last_puzzle_sync = last_puzzle_sync;
+    for p in &puzzles {
+        if p.date > new_last_puzzle_sync {
+            new_last_puzzle_sync = p.date;
+        }
+    }
+
+    let new_puzzles: Vec<_> = puzzles.into_iter().filter(|p| p.date > last_puzzle_sync).collect();
 
     let mut puzzles_eligible = 0;
     let (spins_earned_from_puzzles, total_eligible) = {
@@ -471,6 +487,7 @@ pub async fn claim_sync(
 
     {
         let conn = state.db.lock().unwrap();
+        let _ = db::update_sync_timestamps(&conn, &username, new_last_game_sync, new_last_puzzle_sync);
         let _ = db::update_last_synced_at(&conn, &username, sync_start_time);
     }
 
@@ -492,6 +509,8 @@ pub async fn claim_sync(
         "coins": updated_user.coins,
         "games_eligible": games_eligible,
         "puzzles_eligible": puzzles_eligible,
+        "last_game_sync": new_last_game_sync,
+        "last_puzzle_sync": new_last_puzzle_sync,
         "last_synced_at": sync_start_time
     })).into_response()
 }

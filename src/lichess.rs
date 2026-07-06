@@ -75,7 +75,11 @@ pub async fn fetch_profile(token: &str) -> Result<LichessProfile, reqwest::Error
 
 pub async fn fetch_games(username: &str, token: &str, since: Option<i64>) -> Result<Vec<LichessGame>, reqwest::Error> {
     let client = reqwest::Client::new();
-    let mut query = vec![("rated", "true".to_string())];
+    let mut query = vec![
+        ("rated", "true".to_string()),
+        ("moves", "false".to_string()),
+        ("sort", "dateAsc".to_string()),
+    ];
     if let Some(s) = since {
         if s > 0 {
             query.push(("since", s.to_string()));
