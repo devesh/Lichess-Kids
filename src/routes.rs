@@ -541,6 +541,7 @@ pub async fn claim_sync(
         let mut games_eligible = 0;
         let mut games_claimed = 0;
 
+        let mut game_sync_fully_succeeded = true;
         let start_game_time = if last_game_sync == 0 {
             profile_created_at.unwrap_or(sync_start_time - 30 * 24 * 60 * 60 * 1000)
         } else {
@@ -596,6 +597,7 @@ pub async fn claim_sync(
                 }
                 Err(_) => {
                     if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
+                        game_sync_fully_succeeded = false;
                         break;
                     }
                     game_chunk_duration = actual_duration / 2;
@@ -608,6 +610,7 @@ pub async fn claim_sync(
         let mut spins_earned_from_puzzles = 0;
         let mut total_eligible = 0;
         let mut total_puzzles_processed = 0;
+        let mut puzzle_sync_fully_succeeded = true;
 
         let start_puzzle_time = if last_puzzle_sync == 0 {
             profile_created_at.unwrap_or(sync_start_time - 30 * 24 * 60 * 60 * 1000)
@@ -670,6 +673,7 @@ pub async fn claim_sync(
                 }
                 Err(_) => {
                     if actual_duration < 1000 * 60 * 60 { // Less than 1 hour, don't split further
+                        puzzle_sync_fully_succeeded = false;
                         break;
                     }
                     puzzle_chunk_duration = actual_duration / 2;
@@ -677,7 +681,8 @@ pub async fn claim_sync(
             }
         }
 
-        {
+        let all_chunks_succeeded = game_sync_fully_succeeded && puzzle_sync_fully_succeeded;
+        if all_chunks_succeeded {
             let conn = state.db.lock().unwrap();
             let _ = db::update_last_synced_at(&conn, &username, sync_start_time);
         }
@@ -690,7 +695,8 @@ pub async fn claim_sync(
         let divisor = std::cmp::max(1, state.assets.spin_rules.puzzles_per_spin as usize);
         send_update!(serde_json::json!({
             "type": "done",
-            "success": true,
+            "success": all_chunks_succeeded,
+            "error": if all_chunks_succeeded { serde_json::Value::Null } else { serde_json::Value::String("Sync completed partially because some periods failed to load.".to_string()) },
             "games_sync_spins": games_claimed,
             "puzzles_sync_spins": spins_earned_from_puzzles,
             "daily_spin_claimed": false,
