@@ -236,7 +236,6 @@ pub async fn oauth_callback(
     };
 
     let username = lichess_profile.username;
-    let game_rating = lichess_profile.perfs.blitz.or(lichess_profile.perfs.rapid).map(|p| p.rating).unwrap_or(1500);
 
     // Save token or check if user exists, using a block to drop the lock before returning
     let (exists, cookie) = {
@@ -257,12 +256,12 @@ pub async fn oauth_callback(
         let cookie = format!("username={}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax", username);
 
         if exists {
-            let _ = db::update_user_ratings(&conn, &username, game_rating);
+            // No-op: current game rating is no longer tracked.
         } else {
-            // Create user placeholder, ratings will be set on avatar select
+            // Create user placeholder
             let _ = conn.execute(
-                "INSERT OR IGNORE INTO users (username, avatar_base, current_game_rating) VALUES (?1, 'cat', ?2)",
-                params![username, game_rating],
+                "INSERT OR IGNORE INTO users (username, avatar_base) VALUES (?1, 'cat')",
+                params![username],
             );
             let _ = conn.execute("INSERT OR IGNORE INTO equipped (username) VALUES (?1)", params![username]);
         }
@@ -452,18 +451,21 @@ pub async fn claim_sync(
             };
         }
 
-        // 1. Fetch user's rating profile
+        // 1. Fetch user's profile (creation date used to bound game sync, and puzzle high scores)
         let mut profile_created_at = None;
+        let mut puzzle_storm_score = 0;
+        let mut puzzle_streak_score = 0;
         if let Ok(p) = lichess::fetch_profile(&token).await {
-            let g_rate = p.perfs.blitz.or(p.perfs.rapid).map(|x| x.rating).unwrap_or(1500);
-            let conn = state.db.lock().unwrap();
-            let _ = db::update_user_ratings(&conn, &username, g_rate);
             profile_created_at = p.created_at;
+            puzzle_storm_score = p.perfs.storm.as_ref().map(|s| s.score).unwrap_or(0);
+            puzzle_streak_score = p.perfs.streak.as_ref().map(|s| s.score).unwrap_or(0);
         }
 
         let mut games_eligible = 0;
         let mut games_claimed = 0;
         let mut spins_earned_from_games = 0;
+        let mut puzzle_streak_spins = 0;
+        let mut puzzle_storm_spins = 0;
 
         let mut game_sync_fully_succeeded = true;
         let start_game_time = if last_game_sync == 0 {
@@ -547,6 +549,22 @@ pub async fn claim_sync(
             let _ = db::update_last_synced_at(&conn, &username, sync_start_time);
         }
 
+        // 3. Award spins for the user's highest puzzle streak and storm scores.
+        //    The high scores come from the user's Lichess profile perfs (storm/streak),
+        //    already fetched above. Award spins for the deltas since the last sync.
+        {
+            let conn = state.db.lock().unwrap();
+            if let Ok((streak_spins, storm_spins)) = db::sync_puzzle_high_scores(
+                &conn,
+                &username,
+                puzzle_streak_score,
+                puzzle_storm_score,
+            ) {
+                puzzle_streak_spins = streak_spins;
+                puzzle_storm_spins = storm_spins;
+            }
+        }
+
         let updated_user = {
             let conn = state.db.lock().unwrap();
             db::get_user(&conn, &username).unwrap().unwrap()
@@ -557,6 +575,8 @@ pub async fn claim_sync(
             "success": game_sync_fully_succeeded,
             "error": if game_sync_fully_succeeded { serde_json::Value::Null } else { serde_json::Value::String("Sync completed partially because some periods failed to load.".to_string()) },
             "games_sync_spins": spins_earned_from_games,
+            "puzzle_streak_spins": puzzle_streak_spins,
+            "puzzle_storm_spins": puzzle_storm_spins,
             "daily_spin_claimed": false,
             "spins_available": updated_user.spins_available,
             "coins": updated_user.coins,
@@ -761,7 +781,6 @@ pub async fn equip_item(
 pub struct FriendProfile {
     pub username: String,
     pub avatar_base: String,
-    pub current_game_rating: i32,
     pub equipped: EquippedItems,
     pub lichess_url: String,
 }
@@ -798,17 +817,16 @@ pub async fn get_friends(
         let local_user = {
             let conn = state.db.lock().unwrap();
             conn.query_row(
-                "SELECT username, avatar_base, current_game_rating FROM users WHERE LOWER(username) = LOWER(?1)",
+                "SELECT username, avatar_base FROM users WHERE LOWER(username) = LOWER(?1)",
                 params![f_name],
                 |row| Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, i32>(2)?,
                 ))
             ).ok()
         };
 
-        if let Some((stored_username, avatar_base, g_rating)) = local_user {
+        if let Some((stored_username, avatar_base)) = local_user {
             let equipped = {
                 let conn = state.db.lock().unwrap();
                 db::get_equipped(&conn, &stored_username).unwrap_or_default()
@@ -816,7 +834,6 @@ pub async fn get_friends(
             friends_profiles.push(FriendProfile {
                 username: stored_username.clone(),
                 avatar_base,
-                current_game_rating: g_rating,
                 equipped,
                 lichess_url: format!("https://lichess.org/@/{}", stored_username),
             });
@@ -915,11 +932,14 @@ pub async fn get_user_profile_html(
         <div id="avatar-container" class="avatar-preview" style="width: 200px; height: 200px;"></div>
         <h2>{username}</h2>
         <p style="color: var(--text-secondary);">Lichess Kids Profile</p>
-        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 4px;">
-            Game Rating: <span style="font-weight:700;color:var(--knight-color);">{game_rating}</span>
+        <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
+            Worthy Wins: <span style="font-weight:700;color:var(--success);">{total_games_won}</span>
         </p>
         <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
-            Games Won: <span style="font-weight:700;color:var(--success);">{total_games_won}</span>
+            Puzzle Streak: <span style="font-weight:700;color:var(--knight-color);">{puzzle_streak_score}</span>
+        </p>
+        <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
+            Puzzle Storm: <span style="font-weight:700;color:var(--knight-color);">{puzzle_storm_score}</span>
         </p>
         <a href="https://lichess.org/@/{username}" target="_blank" class="btn btn-secondary" style="width: 100%;">View on Lichess</a>
     </div>
@@ -951,8 +971,9 @@ pub async fn get_user_profile_html(
         username = username,
         avatar_base = user_profile.avatar_base,
         avatar_svg_url = avatar_svg_url,
-        game_rating = user_profile.current_game_rating,
         total_games_won = user_profile.total_games_claimed,
+        puzzle_streak_score = user_profile.last_puzzle_streak_score,
+        puzzle_storm_score = user_profile.last_puzzle_storm_score,
         top = equipped.top.as_deref().unwrap_or(""),
         bottom = equipped.bottom.as_deref().unwrap_or(""),
         hat = equipped.hat.as_deref().unwrap_or(""),

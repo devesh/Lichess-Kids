@@ -1,6 +1,6 @@
 # Lichess Kids
 
-Lichess Kids is a gamified companion application for younger chess players. By winning games against tougher opponents on Lichess, players earn spins on a weighted wheel, collect coins, purchase accessories, customize their cute cartoon avatars, and see their friends' customized avatars.
+Lichess Kids is a gamified companion application for younger chess players. Players earn spins by winning rated games against worthy opponents and by setting new highs in Lichess puzzle Streak and Storm, then spend those spins on a weighted wheel to collect coins, purchase accessories, customize their cute cartoon avatars, and see their friends' customized avatars.
 
 ---
 
@@ -12,6 +12,21 @@ Lichess Kids is a gamified companion application for younger chess players. By w
 *   **Local Friends Discovery**: Sync followed users automatically from Lichess. If a followed user has a local Lichess Kids profile registered on this instance, they will automatically appear in your friends list with their custom equipped avatar.
 *   **Robust Backend**: Written in Rust using the Axum framework and SQLite (`rusqlite`) database with concurrent transaction locks.
 *   **Modern DevOps**: Includes multi-stage Docker builds, rootless Podman Quadlet configuration, and a GitHub Actions CI test pipeline.
+
+---
+
+## 🎡 How Spins Are Earned
+
+Spins are the core reward currency. They are awarded only during a Lichess sync and come from three sources:
+
+*   **Worthy Wins** — For each rated game you *win* against an opponent rated at least `(your rating at the time you played that game) + game_rating_offset`, you earn `spins_per_game` spins (default **2**). Wins are tracked per game so each qualifying win is only ever rewarded once, even across multiple syncs.
+*   **Puzzle Streak** — Lichess Kids awards **1 spin for every puzzle you solved in your all-time best Puzzle Streak score**. Only the *increase* since your last sync is awarded; if your streak high score did not improve, no spins are granted. Over time, the total spins earned from Puzzle Streak always equals your current streak high score.
+*   **Puzzle Storm** — The same rule applies to your all-time best Puzzle Storm score: **1 spin per puzzle in your highest storm score**, awarded as the delta since the last sync, so the lifetime total equals your current storm high score.
+
+> [!IMPORTANT]
+> **Only the spin wheel grants coins.** Game wins and puzzle high scores grant *spins* — never coins directly. Coins are earned exclusively by spending spins on the wheel (Pawn 1c, Knight 3c, Bishop 3c, Rook 5c, Queen 9c).
+
+The profile page and dashboard display each player's **Worthy Wins**, **Puzzle Streak**, and **Puzzle Storm** high score. (Per-game rating is not shown; eligibility uses the rating recorded for each individual game.)
 
 ---
 
@@ -101,16 +116,18 @@ By mounting a host directory to `/app/assets`, you can fully customize the conte
 2. **Remove Item**: Delete the `.svg` file from the `items` directory and remove its entry from `metadata.json`.
 
 #### C. Customizing Spin Rules
-The sync performance requirements can be configured in `/app/assets/metadata.json` under `"spin_rules"`:
+The sync reward rules can be configured in `/app/assets/metadata.json` under `"spin_rules"`:
 ```json
 "spin_rules": {
-  "game_rating_offset": -100
+  "game_rating_offset": -100,
+  "spins_per_game": 2
 }
 ```
-*   `game_rating_offset`: Ratings must be within this offset (or higher) relative to the player's rating at the time of the play. Offset `-100` allows players to win spins for matches against opponents up to 100 points below their current rating.
+*   `game_rating_offset`: An opponent must be rated at least `(your rating at the time you played the game) + game_rating_offset` for a win to count as a "worthy win". Offset `-100` means you earn spins for matches against opponents down to 100 points below your rating *at the moment that game was played* (not your current rating).
+*   `spins_per_game`: How many spins each qualifying worthy win awards (default **2**).
 
 #### ⚠️ Why Daily Spins are Forbidden
-Spins cannot be awarded for daily logins or daily check-ins. Lichess Kids is designed to encourage learning and practice. Spins and rewards must only be earned as an accomplishment for winning matches against challenging opponents. Leaving daily spins disabled prevents gamification loop exploitation and focuses the reward feedback loop strictly on active effort.
+Spins cannot be awarded for daily logins or daily check-ins. Lichess Kids is designed to encourage learning and practice. Spins and rewards must only be earned as an accomplishment for winning matches against challenging opponents or for improving your puzzle Streak and Storm high scores. Leaving daily spins disabled prevents gamification loop exploitation and focuses the reward feedback loop strictly on active effort.
 
 ### 4. Reverse Proxy & SSL Configuration (Recommended)
 

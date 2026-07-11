@@ -21,18 +21,12 @@ fn test_create_and_get_user() {
     assert_eq!(user.avatar_base, "cat");
     assert_eq!(user.coins, 0);
     assert_eq!(user.spins_available, 0);
-    assert_eq!(user.current_game_rating, 1500);
 }
 
 #[test]
 fn test_ratings_and_coins() {
     let conn = setup_in_memory_db();
     db::create_user(&conn, "alice", "dog").unwrap();
-
-    // Update ratings
-    db::update_user_ratings(&conn, "alice", 1600).unwrap();
-    let user = db::get_user(&conn, "alice").unwrap().unwrap();
-    assert_eq!(user.current_game_rating, 1600);
 
     // Reward coins
     let new_coins = db::reward_coins(&conn, "alice", 15).unwrap();
@@ -202,5 +196,75 @@ fn test_delete_user() {
         |row| row.get(0)
     ).unwrap();
     assert_eq!(token_exists, 0);
+}
+
+#[test]
+fn test_sync_puzzle_high_scores() {
+    let conn = setup_in_memory_db();
+    db::create_user(&conn, "henry", "cat").unwrap();
+
+    // First sync: award spins equal to the current high scores.
+    let (streak, storm) = db::sync_puzzle_high_scores(&conn, "henry", 10, 25).unwrap();
+    assert_eq!(streak, 10);
+    assert_eq!(storm, 25);
+    let u = db::get_user(&conn, "henry").unwrap().unwrap();
+    assert_eq!(u.spins_available, 35);
+
+    // Second sync: scores unchanged -> no additional spins.
+    let (streak2, storm2) = db::sync_puzzle_high_scores(&conn, "henry", 10, 25).unwrap();
+    assert_eq!(streak2, 0);
+    assert_eq!(storm2, 0);
+    let u2 = db::get_user(&conn, "henry").unwrap().unwrap();
+    assert_eq!(u2.spins_available, 35);
+
+    // Third sync: only storm improved -> award only the storm delta.
+    let (streak3, storm3) = db::sync_puzzle_high_scores(&conn, "henry", 10, 40).unwrap();
+    assert_eq!(streak3, 0);
+    assert_eq!(storm3, 15);
+    let u3 = db::get_user(&conn, "henry").unwrap().unwrap();
+    assert_eq!(u3.spins_available, 50);
+    // Total awarded equals the highest scores for each mode.
+    assert_eq!(u3.spins_available, u3.last_puzzle_streak_score + u3.last_puzzle_storm_score);
+}
+
+#[test]
+fn test_sync_puzzle_high_scores_edge_cases() {
+    let conn = setup_in_memory_db();
+    db::create_user(&conn, "ivy", "cat").unwrap();
+
+    // Both modes improve at once -> award the full delta for each.
+    let (streak, storm) = db::sync_puzzle_high_scores(&conn, "ivy", 7, 12).unwrap();
+    assert_eq!(streak, 7);
+    assert_eq!(storm, 12);
+
+    // A score dropping below the stored high must NOT award negative spins
+    // and must NOT lower the stored high (lifetime total stays correct).
+    let (streak_down, storm_down) = db::sync_puzzle_high_scores(&conn, "ivy", 3, 9).unwrap();
+    assert_eq!(streak_down, 0);
+    assert_eq!(storm_down, 0);
+    let u = db::get_user(&conn, "ivy").unwrap().unwrap();
+    assert_eq!(u.last_puzzle_streak_score, 7);
+    assert_eq!(u.last_puzzle_storm_score, 12);
+    assert_eq!(u.spins_available, 19);
+
+    // Repeated identical syncs grant nothing further.
+    for _ in 0..3 {
+        let (s, st) = db::sync_puzzle_high_scores(&conn, "ivy", 7, 12).unwrap();
+        assert_eq!(s, 0);
+        assert_eq!(st, 0);
+    }
+
+    // Incremental improvements across many syncs accumulate to the final high score.
+    let (s1, st1) = db::sync_puzzle_high_scores(&conn, "ivy", 20, 12).unwrap();
+    assert_eq!(s1, 13);
+    assert_eq!(st1, 0);
+    let (s2, st2) = db::sync_puzzle_high_scores(&conn, "ivy", 20, 50).unwrap();
+    assert_eq!(s2, 0);
+    assert_eq!(st2, 38);
+
+    let u_final = db::get_user(&conn, "ivy").unwrap().unwrap();
+    // Total spins awarded always equals the sum of the current high scores.
+    assert_eq!(u_final.spins_available, u_final.last_puzzle_streak_score + u_final.last_puzzle_storm_score);
+    assert_eq!(u_final.spins_available, 70);
 }
 

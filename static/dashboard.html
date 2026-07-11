@@ -79,11 +79,14 @@
                 <div id="avatar-container" class="avatar-preview clickable-card"></div>
                 <div style="text-align: center;">
                     <h2 id="profile-name" style="margin-bottom: 2px;">Player</h2>
-                    <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 4px;">
-                        Game Rating: <span id="game-rating" style="font-weight:700;color:var(--knight-color);">1500</span>
+                    <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
+                        Worthy Wins: <span id="total-games-won" style="font-weight:700;color:var(--success);">0</span>
                     </p>
                     <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
-                        Games Won: <span id="total-games-won" style="font-weight:700;color:var(--success);">0</span>
+                        Puzzle Streak: <span id="puzzle-streak-score" style="font-weight:700;color:var(--knight-color);">0</span>
+                    </p>
+                    <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
+                        Puzzle Storm: <span id="puzzle-storm-score" style="font-weight:700;color:var(--knight-color);">0</span>
                     </p>
                 </div>
 
@@ -366,8 +369,9 @@
                 document.getElementById('spins-display').innerText = userProfile.spins_available;
 
                 // Update ratings and total counts
-                document.getElementById('game-rating').innerText = userProfile.current_game_rating;
                 document.getElementById('total-games-won').innerText = userProfile.total_games_claimed;
+                document.getElementById('puzzle-streak-score').innerText = userProfile.last_puzzle_streak_score;
+                document.getElementById('puzzle-storm-score').innerText = userProfile.last_puzzle_storm_score;
 
                 // Update Game Sync timestamps
                 const gameSyncEl = document.getElementById('latest-game-sync');
@@ -711,9 +715,13 @@
                                 }, 300);
 
                                 if (data.success) {
-                                    let totalSpins = data.games_sync_spins;
+                                    let totalSpins = data.games_sync_spins + (data.puzzle_streak_spins || 0) + (data.puzzle_storm_spins || 0);
+                                    let detail = [];
+                                    if (data.games_sync_spins > 0) detail.push(`${data.games_sync_spins} from games`);
+                                    if (data.puzzle_streak_spins > 0) detail.push(`${data.puzzle_streak_spins} from puzzle streak`);
+                                    if (data.puzzle_storm_spins > 0) detail.push(`${data.puzzle_storm_spins} from puzzle storm`);
                                     syncStatus.style.color = 'var(--success)';
-                                    syncStatus.innerText = `Sync Complete! Earned ${totalSpins} spins. Found ${data.games_eligible} games won meeting criteria.`;
+                                    syncStatus.innerText = `Sync Complete! Earned ${totalSpins} spins` + (detail.length ? ` (${detail.join(', ')})` : '') + `. Found ${data.games_eligible} games won meeting criteria.`;
                                     // Reload profile to update spins balance and ratings
                                     loadProfile();
                                 } else {
@@ -762,7 +770,6 @@
                             <div class="friend-mini-avatar" id="svg-friend-${friend.username}"></div>
                             <div class="friend-meta">
                                 <h3>${friend.username}</h3>
-                                <p>Game Rating: ${friend.current_game_rating}</p>
                             </div>
                         </div>
                         <div style="display:flex; gap:10px; align-items:center;">

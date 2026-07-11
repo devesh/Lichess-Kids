@@ -7,10 +7,11 @@ pub struct UserProfile {
     pub avatar_base: String,
     pub coins: i32,
     pub spins_available: i32,
-    pub current_game_rating: i32,
     pub last_daily_spin_claim: String,
     pub last_synced_at: i64,
     pub last_game_sync: i64,
+    pub last_puzzle_streak_score: i32,
+    pub last_puzzle_storm_score: i32,
     pub total_games_claimed: i32,
 }
 
@@ -37,9 +38,10 @@ pub fn init_db(db_path: &str) -> Result<Connection> {
             avatar_base TEXT NOT NULL,
             coins INTEGER NOT NULL DEFAULT 0,
             spins_available INTEGER NOT NULL DEFAULT 0,
-            current_game_rating INTEGER NOT NULL DEFAULT 1500,
             last_synced_at INTEGER NOT NULL DEFAULT 0,
-            last_game_sync INTEGER NOT NULL DEFAULT 0
+            last_game_sync INTEGER NOT NULL DEFAULT 0,
+            last_puzzle_streak_score INTEGER NOT NULL DEFAULT 0,
+            last_puzzle_storm_score INTEGER NOT NULL DEFAULT 0
         );",
         [],
     )?;
@@ -101,6 +103,10 @@ pub fn init_db(db_path: &str) -> Result<Connection> {
     // Migration: Add last_game_sync column to users if it doesn't exist
     let _ = conn.execute("ALTER TABLE users ADD COLUMN last_game_sync INTEGER DEFAULT 0;", []);
 
+    // Migration: Add puzzle high-score tracking columns to users if they don't exist
+    let _ = conn.execute("ALTER TABLE users ADD COLUMN last_puzzle_streak_score INTEGER DEFAULT 0;", []);
+    let _ = conn.execute("ALTER TABLE users ADD COLUMN last_puzzle_storm_score INTEGER DEFAULT 0;", []);
+
     Ok(conn)
 }
 
@@ -120,7 +126,7 @@ pub fn create_user(conn: &Connection, username: &str, avatar_base: &str) -> Resu
 
 pub fn get_user(conn: &Connection, username: &str) -> Result<Option<UserProfile>> {
     let mut stmt = conn.prepare(
-        "SELECT username, avatar_base, coins, spins_available, current_game_rating, last_daily_spin_claim, last_synced_at, last_game_sync 
+        "SELECT username, avatar_base, coins, spins_available, last_daily_spin_claim, last_synced_at, last_game_sync, last_puzzle_streak_score, last_puzzle_storm_score
          FROM users WHERE username = ?1"
     )?;
 
@@ -137,10 +143,11 @@ pub fn get_user(conn: &Connection, username: &str) -> Result<Option<UserProfile>
             avatar_base: row.get(1)?,
             coins: row.get(2)?,
             spins_available: row.get(3)?,
-            current_game_rating: row.get(4)?,
-            last_daily_spin_claim: row.get(5).unwrap_or_default(),
-            last_synced_at: row.get(6).unwrap_or(0),
-            last_game_sync: row.get(7).unwrap_or(0),
+            last_daily_spin_claim: row.get(4).unwrap_or_default(),
+            last_synced_at: row.get(5).unwrap_or(0),
+            last_game_sync: row.get(6).unwrap_or(0),
+            last_puzzle_streak_score: row.get(7).unwrap_or(0),
+            last_puzzle_storm_score: row.get(8).unwrap_or(0),
             total_games_claimed,
         }))
     } else {
@@ -152,14 +159,6 @@ pub fn update_last_daily_spin_claim(conn: &Connection, username: &str, claim_dat
     conn.execute(
         "UPDATE users SET last_daily_spin_claim = ?2 WHERE username = ?1",
         params![username, claim_date],
-    )?;
-    Ok(())
-}
-
-pub fn update_user_ratings(conn: &Connection, username: &str, game_rating: i32) -> Result<()> {
-    conn.execute(
-        "UPDATE users SET current_game_rating = ?2 WHERE username = ?1",
-        params![username, game_rating],
     )?;
     Ok(())
 }
@@ -339,6 +338,47 @@ pub fn update_sync_timestamps(conn: &Connection, username: &str, last_game_sync:
         params![username, last_game_sync],
     )?;
     Ok(())
+}
+
+/// Awards spins for the user's highest puzzle streak and storm scores.
+///
+/// For each mode, the number of spins awarded equals the increase in the user's
+/// all-time high score since the last sync (`high_score - last_synced_score`).
+/// If a score has not gone up, no spins are awarded for that mode. The stored
+/// high score is always updated to the current best, so the total spins ever
+/// awarded for a mode always equals the user's highest score for that mode.
+///
+/// Returns the number of spins awarded for the streak and storm modes.
+pub fn sync_puzzle_high_scores(
+    conn: &Connection,
+    username: &str,
+    streak_score: i32,
+    storm_score: i32,
+) -> Result<(i32, i32)> {
+    let stored: (i32, i32) = conn.query_row(
+        "SELECT last_puzzle_streak_score, last_puzzle_storm_score FROM users WHERE username = ?1",
+        params![username],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+
+    let streak_award = streak_score.saturating_sub(stored.0).max(0);
+    let storm_award = storm_score.saturating_sub(stored.1).max(0);
+
+    if streak_award > 0 {
+        let _ = add_spins(conn, username, streak_award);
+    }
+    if storm_award > 0 {
+        let _ = add_spins(conn, username, storm_award);
+    }
+
+    let new_streak = stored.0.max(streak_score);
+    let new_storm = stored.1.max(storm_score);
+    conn.execute(
+        "UPDATE users SET last_puzzle_streak_score = ?2, last_puzzle_storm_score = ?3 WHERE username = ?1",
+        params![username, new_streak, new_storm],
+    )?;
+
+    Ok((streak_award, storm_award))
 }
 
 pub fn delete_user(conn: &Connection, username: &str) -> Result<()> {

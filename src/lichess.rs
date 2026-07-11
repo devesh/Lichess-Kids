@@ -6,11 +6,19 @@ pub struct LichessPerf {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LichessPuzzleHighScore {
+    pub runs: i32,
+    pub score: i32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LichessPerfs {
     pub puzzle: Option<LichessPerf>,
     pub blitz: Option<LichessPerf>,
     pub bullet: Option<LichessPerf>,
     pub rapid: Option<LichessPerf>,
+    pub storm: Option<LichessPuzzleHighScore>,
+    pub streak: Option<LichessPuzzleHighScore>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -118,8 +126,5 @@ pub async fn fetch_following(token: &str) -> Result<Vec<String>, reqwest::Error>
     }
     Ok(followed)
 }
-
-
-
 
 
