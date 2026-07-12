@@ -19,6 +19,7 @@ pub struct LichessPerfs {
     pub rapid: Option<LichessPerf>,
     pub storm: Option<LichessPuzzleHighScore>,
     pub streak: Option<LichessPuzzleHighScore>,
+    pub racer: Option<LichessPuzzleHighScore>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

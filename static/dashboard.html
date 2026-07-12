@@ -88,6 +88,9 @@
                     <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
                         Puzzle Storm: <span id="puzzle-storm-score" style="font-weight:700;color:var(--knight-color);">0</span>
                     </p>
+                    <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
+                        Puzzle Racer: <span id="puzzle-racer-score" style="font-weight:700;color:var(--knight-color);">0</span>
+                    </p>
                 </div>
 
                 <!-- Equipped Items List -->
@@ -372,6 +375,7 @@
                 document.getElementById('total-games-won').innerText = userProfile.total_games_claimed;
                 document.getElementById('puzzle-streak-score').innerText = userProfile.last_puzzle_streak_score;
                 document.getElementById('puzzle-storm-score').innerText = userProfile.last_puzzle_storm_score;
+                document.getElementById('puzzle-racer-score').innerText = userProfile.last_puzzle_racer_score;
 
                 // Update Game Sync timestamps
                 const gameSyncEl = document.getElementById('latest-game-sync');
@@ -714,12 +718,20 @@
                                     progressContainer.style.display = 'none';
                                 }, 300);
 
+                                if (data.reauthorize) {
+                                    // Stored Lichess token expired/revoked: send the user
+                                    // back to Lichess to re-authorize.
+                                    window.location.href = data.reauthorize_url || '/api/oauth/start?redirect=1';
+                                    return;
+                                }
+
                                 if (data.success) {
-                                    let totalSpins = data.games_sync_spins + (data.puzzle_streak_spins || 0) + (data.puzzle_storm_spins || 0);
+                                    let totalSpins = data.games_sync_spins + (data.puzzle_streak_spins || 0) + (data.puzzle_storm_spins || 0) + (data.puzzle_racer_spins || 0);
                                     let detail = [];
                                     if (data.games_sync_spins > 0) detail.push(`${data.games_sync_spins} from games`);
                                     if (data.puzzle_streak_spins > 0) detail.push(`${data.puzzle_streak_spins} from puzzle streak`);
                                     if (data.puzzle_storm_spins > 0) detail.push(`${data.puzzle_storm_spins} from puzzle storm`);
+                                    if (data.puzzle_racer_spins > 0) detail.push(`${data.puzzle_racer_spins} from puzzle racer`);
                                     syncStatus.style.color = 'var(--success)';
                                     syncStatus.innerText = `Sync Complete! Earned ${totalSpins} spins` + (detail.length ? ` (${detail.join(', ')})` : '') + `. Found ${data.games_eligible} games won meeting criteria.`;
                                     // Reload profile to update spins balance and ratings
@@ -754,6 +766,15 @@
         async function loadFriends() {
             try {
                 const res = await fetch('/api/friends');
+                if (res.status === 401) {
+                    const body = await res.json().catch(() => ({}));
+                    if (body.reauthorize) {
+                        window.location.href = body.reauthorize_url || '/api/oauth/start?redirect=1';
+                        return;
+                    }
+                    window.location.href = '/login.html';
+                    return;
+                }
                 const friends = await res.json();
                 friendsList.innerHTML = '';
 

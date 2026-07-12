@@ -12,6 +12,7 @@ pub struct UserProfile {
     pub last_game_sync: i64,
     pub last_puzzle_streak_score: i32,
     pub last_puzzle_storm_score: i32,
+    pub last_puzzle_racer_score: i32,
     pub total_games_claimed: i32,
 }
 
@@ -106,8 +107,66 @@ pub fn init_db(db_path: &str) -> Result<Connection> {
     // Migration: Add puzzle high-score tracking columns to users if they don't exist
     let _ = conn.execute("ALTER TABLE users ADD COLUMN last_puzzle_streak_score INTEGER DEFAULT 0;", []);
     let _ = conn.execute("ALTER TABLE users ADD COLUMN last_puzzle_storm_score INTEGER DEFAULT 0;", []);
+    let _ = conn.execute("ALTER TABLE users ADD COLUMN last_puzzle_racer_score INTEGER DEFAULT 0;", []);
+
+    // Create lichess_tokens table (persists the long-lived Lichess access token).
+    // Lichess OAuth does not issue refresh tokens; the access token itself is
+    // long-lived (~1 year), so we store it and reuse it until it expires/is revoked.
+    let _ = conn.execute(
+        "CREATE TABLE IF NOT EXISTS lichess_tokens (
+            username TEXT PRIMARY KEY,
+            access_token TEXT NOT NULL,
+            expires_at INTEGER NOT NULL DEFAULT 0
+        );",
+        [],
+    );
+
+    // Migration: add expires_at column if an older schema is present
+    let has_expires: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('lichess_tokens') WHERE name = 'expires_at'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if has_expires == 0 {
+        let _ = conn.execute(
+            "ALTER TABLE lichess_tokens ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;",
+            [],
+        );
+    }
 
     Ok(conn)
+}
+
+/// Stores (or replaces) the user's Lichess access token along with its
+/// absolute expiry timestamp (Unix seconds). Pass `expires_at == 0` when the
+/// expiry is unknown; the caller will then rely on API 401s to detect expiry.
+pub fn store_lichess_token(
+    conn: &Connection,
+    username: &str,
+    access_token: &str,
+    expires_at: i64,
+) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO lichess_tokens (username, access_token, expires_at) VALUES (?1, ?2, ?3)",
+        params![username, access_token, expires_at],
+    )?;
+    Ok(())
+}
+
+/// Returns the stored Lichess access token and its expiry timestamp
+/// (Unix seconds; 0 means unknown), if a token exists for the user.
+pub fn get_lichess_token(conn: &Connection, username: &str) -> Result<Option<(String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT access_token, expires_at FROM lichess_tokens WHERE username = ?1",
+    )?;
+    let mut rows = stmt.query(params![username])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some((row.get(0)?, row.get(1)?)))
+    } else {
+        Ok(None)
+    }
 }
 
 pub fn create_user(conn: &Connection, username: &str, avatar_base: &str) -> Result<()> {
@@ -126,7 +185,7 @@ pub fn create_user(conn: &Connection, username: &str, avatar_base: &str) -> Resu
 
 pub fn get_user(conn: &Connection, username: &str) -> Result<Option<UserProfile>> {
     let mut stmt = conn.prepare(
-        "SELECT username, avatar_base, coins, spins_available, last_daily_spin_claim, last_synced_at, last_game_sync, last_puzzle_streak_score, last_puzzle_storm_score
+        "SELECT username, avatar_base, coins, spins_available, last_daily_spin_claim, last_synced_at, last_game_sync, last_puzzle_streak_score, last_puzzle_storm_score, last_puzzle_racer_score
          FROM users WHERE username = ?1"
     )?;
 
@@ -148,6 +207,7 @@ pub fn get_user(conn: &Connection, username: &str) -> Result<Option<UserProfile>
             last_game_sync: row.get(6).unwrap_or(0),
             last_puzzle_streak_score: row.get(7).unwrap_or(0),
             last_puzzle_storm_score: row.get(8).unwrap_or(0),
+            last_puzzle_racer_score: row.get(9).unwrap_or(0),
             total_games_claimed,
         }))
     } else {
@@ -340,29 +400,31 @@ pub fn update_sync_timestamps(conn: &Connection, username: &str, last_game_sync:
     Ok(())
 }
 
-/// Awards spins for the user's highest puzzle streak and storm scores.
+/// Awards spins for the user's highest puzzle streak, storm, and duel (racer)
+/// scores. For each mode, the number of spins awarded equals the increase in
+/// the user's all-time high score since the last sync
+/// (`high_score - last_synced_score`). If a score has not gone up, no spins are
+/// awarded for that mode. The stored high score is always updated to the current
+/// best, so the total spins ever awarded for a mode always equals the user's
+/// highest score for that mode.
 ///
-/// For each mode, the number of spins awarded equals the increase in the user's
-/// all-time high score since the last sync (`high_score - last_synced_score`).
-/// If a score has not gone up, no spins are awarded for that mode. The stored
-/// high score is always updated to the current best, so the total spins ever
-/// awarded for a mode always equals the user's highest score for that mode.
-///
-/// Returns the number of spins awarded for the streak and storm modes.
+/// Returns the number of spins awarded for the streak, storm, and duel modes.
 pub fn sync_puzzle_high_scores(
     conn: &Connection,
     username: &str,
     streak_score: i32,
     storm_score: i32,
-) -> Result<(i32, i32)> {
-    let stored: (i32, i32) = conn.query_row(
-        "SELECT last_puzzle_streak_score, last_puzzle_storm_score FROM users WHERE username = ?1",
+    racer_score: i32,
+) -> Result<(i32, i32, i32)> {
+    let stored: (i32, i32, i32) = conn.query_row(
+        "SELECT last_puzzle_streak_score, last_puzzle_storm_score, last_puzzle_racer_score FROM users WHERE username = ?1",
         params![username],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
 
     let streak_award = streak_score.saturating_sub(stored.0).max(0);
     let storm_award = storm_score.saturating_sub(stored.1).max(0);
+    let racer_award = racer_score.saturating_sub(stored.2).max(0);
 
     if streak_award > 0 {
         let _ = add_spins(conn, username, streak_award);
@@ -370,15 +432,19 @@ pub fn sync_puzzle_high_scores(
     if storm_award > 0 {
         let _ = add_spins(conn, username, storm_award);
     }
+    if racer_award > 0 {
+        let _ = add_spins(conn, username, racer_award);
+    }
 
     let new_streak = stored.0.max(streak_score);
     let new_storm = stored.1.max(storm_score);
+    let new_racer = stored.2.max(racer_score);
     conn.execute(
-        "UPDATE users SET last_puzzle_streak_score = ?2, last_puzzle_storm_score = ?3 WHERE username = ?1",
-        params![username, new_streak, new_storm],
+        "UPDATE users SET last_puzzle_streak_score = ?2, last_puzzle_storm_score = ?3, last_puzzle_racer_score = ?4 WHERE username = ?1",
+        params![username, new_streak, new_storm, new_racer],
     )?;
 
-    Ok((streak_award, storm_award))
+    Ok((streak_award, storm_award, racer_award))
 }
 
 pub fn delete_user(conn: &Connection, username: &str) -> Result<()> {

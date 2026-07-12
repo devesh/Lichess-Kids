@@ -39,6 +39,35 @@ fn get_username(headers: &HeaderMap) -> Option<String> {
         })
 }
 
+/// Where the frontend should send the user to re-authorize with Lichess when a
+/// stored token has expired or been revoked. `oauth_start` issues a 302 to the
+/// Lichess authorization URL for this path.
+pub const REAUTHORIZE_URL: &str = "/api/oauth/start?redirect=1";
+
+/// Returns the stored Lichess access token if one exists and is not past its
+/// recorded expiry. Lichess tokens are long-lived and there is no refresh
+/// token, so once expired (or if revoked server-side) the user must re-login;
+/// a `None` here means the caller should prompt re-authentication.
+fn get_valid_token(conn: &rusqlite::Connection, username: &str) -> Option<String> {
+    let (token, expires_at) = db::get_lichess_token(conn, username).ok().flatten()?;
+    if expires_at > 0 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        if now >= expires_at {
+            return None;
+        }
+    }
+    Some(token)
+}
+
+/// True when a Lichess API error is an authentication failure (HTTP 401),
+/// meaning the stored access token has expired or been revoked.
+fn is_token_unauthorized(err: &reqwest::Error) -> bool {
+    err.status() == Some(axum::http::StatusCode::UNAUTHORIZED)
+}
+
 // -------------------------------------------------------------
 // USER PROFILE & LOGIN ROUTES
 // -------------------------------------------------------------
@@ -93,7 +122,20 @@ pub async fn get_profile(
 
 
 
-pub async fn logout() -> impl IntoResponse {
+pub async fn logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    // Clear the login session and drop the stored Lichess token so a fresh
+    // login is required on next visit.
+    if let Some(username) = get_username(&headers) {
+        let conn = state.db.lock().unwrap();
+        let _ = conn.execute(
+            "DELETE FROM lichess_tokens WHERE username = ?1",
+            params![username],
+        );
+    }
+
     let cookie = "username=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax";
     let mut headers = HeaderMap::new();
     headers.insert("set-cookie", cookie.parse().unwrap());
@@ -110,9 +152,15 @@ pub struct OAuthCallbackQuery {
     pub state: String,
 }
 
+#[derive(Deserialize)]
+pub struct OAuthStartQuery {
+    redirect: Option<String>,
+}
+
 pub async fn oauth_start(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<OAuthStartQuery>,
 ) -> impl IntoResponse {
     let host = headers.get("host")
         .and_then(|h| h.to_str().ok())
@@ -165,7 +213,14 @@ pub async fn oauth_start(
         code_challenge
     );
 
-    Json(serde_json::json!({ "auth_url": auth_url }))
+    // When redirect=1 we send the browser straight to Lichess to re-authorize
+    // (used when a stored token has expired/been revoked). Otherwise return the
+    // URL as JSON so the login page can navigate to it after a user click.
+    if query.redirect.as_deref() == Some("1") {
+        return Redirect::to(&auth_url).into_response();
+    }
+
+    Json(serde_json::json!({ "auth_url": auth_url })).into_response()
 }
 
 #[axum::debug_handler]
@@ -222,12 +277,26 @@ pub async fn oauth_callback(
     #[derive(Deserialize)]
     struct TokenResponse {
         access_token: String,
+        #[serde(default)]
+        expires_in: Option<u64>,
     }
 
     let token_data = match token_res.json::<TokenResponse>().await {
         Ok(data) => data,
         Err(_) => return Redirect::to("/login.html?error=token_parse_failed").into_response(),
     };
+
+    // Lichess access tokens are long-lived (~1 year) and there is no refresh
+    // token. Compute the absolute expiry so we can detect staleness, but we
+    // still rely on API 401 responses as the source of truth for revocation.
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let expires_at = token_data
+        .expires_in
+        .map(|secs| now_secs + secs as i64)
+        .unwrap_or(0);
 
     // Fetch user profile from Lichess
     let lichess_profile = match lichess::fetch_profile(&token_data.access_token).await {
@@ -243,17 +312,22 @@ pub async fn oauth_callback(
         let _ = conn.execute(
             "CREATE TABLE IF NOT EXISTS lichess_tokens (
                 username TEXT PRIMARY KEY,
-                access_token TEXT NOT NULL
+                access_token TEXT NOT NULL,
+                expires_at INTEGER NOT NULL DEFAULT 0
             );",
             [],
         );
-        let _ = conn.execute(
-            "INSERT OR REPLACE INTO lichess_tokens (username, access_token) VALUES (?1, ?2)",
-            params![username, token_data.access_token],
+        let _ = db::store_lichess_token(
+            &conn,
+            &username,
+            &token_data.access_token,
+            expires_at,
         );
 
         let exists = db::get_user(&conn, &username).unwrap().is_some();
-        let cookie = format!("username={}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax", username);
+        // Keep the user logged in until they explicitly log out: use a long-lived
+        // cookie (1 year) that outlives the daily expiry used previously.
+        let cookie = format!("username={}; Path=/; HttpOnly; Max-Age=31536000; SameSite=Lax", username);
 
         if exists {
             // No-op: current game rating is no longer tracked.
@@ -403,13 +477,7 @@ pub async fn claim_sync(
 
     let (token, last_game_sync) = {
         let conn = state.db.lock().unwrap();
-        let token: Option<String> = conn
-            .query_row(
-                "SELECT access_token FROM lichess_tokens WHERE username = ?1",
-                params![username],
-                |row| row.get(0),
-            )
-            .ok();
+        let token = get_valid_token(&conn, &username);
 
         let mut g_sync = 0;
         if let Some(user) = db::get_user(&conn, &username).unwrap() {
@@ -429,12 +497,14 @@ pub async fn claim_sync(
             let err_msg = serde_json::json!({
                 "type": "done",
                 "success": false,
-                "error": "Lichess token not found. Please log in again."
+                "error": "Your Lichess session has expired. Please log in again.",
+                "reauthorize": true,
+                "reauthorize_url": REAUTHORIZE_URL
             });
             let _ = tx.try_send(axum::body::Bytes::from(err_msg.to_string() + "\n"));
             let stream = ChannelStream { receiver: rx };
             return (
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNAUTHORIZED,
                 [(CONTENT_TYPE, HeaderValue::from_static("application/x-ndjson"))],
                 Body::from_stream(stream)
             ).into_response();
@@ -455,10 +525,27 @@ pub async fn claim_sync(
         let mut profile_created_at = None;
         let mut puzzle_storm_score = 0;
         let mut puzzle_streak_score = 0;
-        if let Ok(p) = lichess::fetch_profile(&token).await {
-            profile_created_at = p.created_at;
-            puzzle_storm_score = p.perfs.storm.as_ref().map(|s| s.score).unwrap_or(0);
-            puzzle_streak_score = p.perfs.streak.as_ref().map(|s| s.score).unwrap_or(0);
+        let mut puzzle_racer_score = 0;
+        match lichess::fetch_profile(&token).await {
+            Ok(p) => {
+                profile_created_at = p.created_at;
+                puzzle_storm_score = p.perfs.storm.as_ref().map(|s| s.score).unwrap_or(0);
+                puzzle_streak_score = p.perfs.streak.as_ref().map(|s| s.score).unwrap_or(0);
+                puzzle_racer_score = p.perfs.racer.as_ref().map(|s| s.score).unwrap_or(0);
+            }
+            Err(e) => {
+                if is_token_unauthorized(&e) {
+                    send_update!(serde_json::json!({
+                        "type": "done",
+                        "success": false,
+                        "error": "Your Lichess session has expired. Please log in again.",
+                        "reauthorize": true,
+                        "reauthorize_url": REAUTHORIZE_URL
+                    }));
+                    return;
+                }
+                // Other errors: proceed without profile-derived bounds.
+            }
         }
 
         let mut games_eligible = 0;
@@ -466,6 +553,7 @@ pub async fn claim_sync(
         let mut spins_earned_from_games = 0;
         let mut puzzle_streak_spins = 0;
         let mut puzzle_storm_spins = 0;
+        let mut puzzle_racer_spins = 0;
 
         let mut game_sync_fully_succeeded = true;
         let start_game_time = if last_game_sync == 0 {
@@ -549,19 +637,22 @@ pub async fn claim_sync(
             let _ = db::update_last_synced_at(&conn, &username, sync_start_time);
         }
 
-        // 3. Award spins for the user's highest puzzle streak and storm scores.
-        //    The high scores come from the user's Lichess profile perfs (storm/streak),
-        //    already fetched above. Award spins for the deltas since the last sync.
+        // 3. Award spins for the user's highest puzzle streak, storm, and duel
+        //    (racer) scores. The high scores come from the user's Lichess profile
+        //    perfs (storm/streak/racer), already fetched above. Award one spin
+        //    per solved puzzle for the increase in each mode's best score.
         {
             let conn = state.db.lock().unwrap();
-            if let Ok((streak_spins, storm_spins)) = db::sync_puzzle_high_scores(
+            if let Ok((streak_spins, storm_spins, racer_spins)) = db::sync_puzzle_high_scores(
                 &conn,
                 &username,
                 puzzle_streak_score,
                 puzzle_storm_score,
+                puzzle_racer_score,
             ) {
                 puzzle_streak_spins = streak_spins;
                 puzzle_storm_spins = storm_spins;
+                puzzle_racer_spins = racer_spins;
             }
         }
 
@@ -577,6 +668,7 @@ pub async fn claim_sync(
             "games_sync_spins": spins_earned_from_games,
             "puzzle_streak_spins": puzzle_streak_spins,
             "puzzle_storm_spins": puzzle_storm_spins,
+            "puzzle_racer_spins": puzzle_racer_spins,
             "daily_spin_claimed": false,
             "spins_available": updated_user.spins_available,
             "coins": updated_user.coins,
@@ -796,17 +888,35 @@ pub async fn get_friends(
 
     let token = {
         let conn = state.db.lock().unwrap();
-        conn.query_row(
-            "SELECT access_token FROM lichess_tokens WHERE username = ?1",
-            params![username],
-            |row| row.get::<_, String>(0),
-        )
-        .ok()
+        get_valid_token(&conn, &username)
     };
 
-    let token_str = token.unwrap_or_default();
+    let token_str = match token {
+        Some(t) => t,
+        None => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "Your Lichess session has expired. Please log in again.",
+                    "reauthorize": true,
+                    "reauthorize_url": REAUTHORIZE_URL
+                })),
+            ))
+        }
+    };
+
     let followed = match lichess::fetch_following(&token_str).await {
         Ok(lst) => lst,
+        Err(e) if is_token_unauthorized(&e) => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "Your Lichess session has expired. Please log in again.",
+                    "reauthorize": true,
+                    "reauthorize_url": REAUTHORIZE_URL
+                })),
+            ))
+        }
         Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Following fetch failed: {}", e) })))),
     };
 
@@ -941,6 +1051,9 @@ pub async fn get_user_profile_html(
         <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
             Puzzle Storm: <span style="font-weight:700;color:var(--knight-color);">{puzzle_storm_score}</span>
         </p>
+        <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0;">
+            Puzzle Racer: <span style="font-weight:700;color:var(--knight-color);">{puzzle_racer_score}</span>
+        </p>
         <a href="https://lichess.org/@/{username}" target="_blank" class="btn btn-secondary" style="width: 100%;">View on Lichess</a>
     </div>
 
@@ -974,6 +1087,7 @@ pub async fn get_user_profile_html(
         total_games_won = user_profile.total_games_claimed,
         puzzle_streak_score = user_profile.last_puzzle_streak_score,
         puzzle_storm_score = user_profile.last_puzzle_storm_score,
+        puzzle_racer_score = user_profile.last_puzzle_racer_score,
         top = equipped.top.as_deref().unwrap_or(""),
         bottom = equipped.bottom.as_deref().unwrap_or(""),
         hat = equipped.hat.as_deref().unwrap_or(""),
@@ -1120,6 +1234,51 @@ pub async fn delete_profile(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    fn now_secs() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    fn setup() -> rusqlite::Connection {
+        db::init_db(":memory:").expect("init db")
+    }
+
+    #[test]
+    fn valid_token_present_and_unexpired_is_returned() {
+        let conn = setup();
+        db::store_lichess_token(&conn, "alice", "tok123", now_secs() + 3600).unwrap();
+        assert_eq!(get_valid_token(&conn, "alice").as_deref(), Some("tok123"));
+    }
+
+    #[test]
+    fn expired_token_is_rejected() {
+        let conn = setup();
+        db::store_lichess_token(&conn, "alice", "tok123", now_secs() - 10).unwrap();
+        assert!(get_valid_token(&conn, "alice").is_none());
+    }
+
+    #[test]
+    fn missing_token_is_rejected() {
+        let conn = setup();
+        assert!(get_valid_token(&conn, "ghost").is_none());
+    }
+
+    #[test]
+    fn unknown_expiry_token_is_still_used() {
+        // expires_at == 0 means we don't know the lifetime; rely on API 401s.
+        let conn = setup();
+        db::store_lichess_token(&conn, "alice", "tok123", 0).unwrap();
+        assert_eq!(get_valid_token(&conn, "alice").as_deref(), Some("tok123"));
     }
 }
 
